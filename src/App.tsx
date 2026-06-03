@@ -20,6 +20,7 @@ import ImportPage from "./pages/Import";
 import AlertsPage from "./pages/Alerts";
 import ReviewPage from "./pages/Review";
 import CryptoSpotPage from "./pages/CryptoSpot";
+import CryptoContractPage from "./pages/CryptoContract";
 import SettingsPage from "./pages/Settings";
 
 function App() {
@@ -122,6 +123,7 @@ function App() {
           <Route path="/alerts" element={<AlertsPage />} />
           <Route path="/review" element={<ReviewPage />} />
           <Route path="/crypto-spot" element={<CryptoSpotPage />} />
+          <Route path="/crypto-contract" element={<CryptoContractPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </MainLayout>

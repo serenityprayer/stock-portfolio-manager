@@ -63,12 +63,27 @@ export default function CryptoSpotPage() {
     exchange?: string;
     notes?: string;
   }) => {
+    // 先校验币种符号是否有效
+    const symbolUpper = values.symbol.trim().toUpperCase();
+    try {
+      const check = await invoke<Record<string, { price: number }>>("fetch_crypto_quotes", {
+        symbols: symbolUpper,
+      });
+      if (!check[symbolUpper] || check[symbolUpper].price <= 0) {
+        message.error(`币种 ${symbolUpper} 不存在或无法获取行情，请检查符号`);
+        return;
+      }
+    } catch (err) {
+      message.error(`币种 ${symbolUpper} 无效: ${err}`);
+      return;
+    }
+
     try {
       if (editingSpot) {
-        await updateCryptoSpot({ id: editingSpot.id, ...values });
+        await updateCryptoSpot({ id: editingSpot.id, ...values, symbol: symbolUpper });
         message.success("修改成功");
       } else {
-        await createCryptoSpot(values);
+        await createCryptoSpot({ ...values, symbol: symbolUpper });
         message.success("添加成功");
       }
       setModalOpen(false);

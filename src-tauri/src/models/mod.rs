@@ -2,6 +2,7 @@ pub mod account;
 pub mod ai_config;
 pub mod alert;
 pub mod category;
+pub mod crypto_contract;
 pub mod crypto_spot;
 pub mod dashboard;
 pub mod holding;

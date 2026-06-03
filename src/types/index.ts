@@ -87,6 +87,55 @@ export type UpdateCryptoSpotPayload = {
   notes?: string;
 };
 
+export interface CryptoContract {
+  id: string;
+  symbol: string;
+  name: string | null;
+  asset_type: "crypto" | "tradfi";
+  position_type: "long" | "short";
+  open_price: number;
+  shares: number;
+  leverage: number;
+  margin: number;
+  fee: number;
+  exchange: string | null;
+  notes: string | null;
+  current_price: number | null;
+  market_value: number | null;
+  pnl: number | null;
+  pnl_pct: number | null;
+  liquidation_price: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type CreateCryptoContractPayload = {
+  symbol: string;
+  name?: string;
+  asset_type?: "crypto" | "tradfi";
+  position_type: "long" | "short";
+  open_price: number;
+  shares: number;
+  leverage: number;
+  fee?: number;
+  exchange?: string;
+  notes?: string;
+};
+
+export type UpdateCryptoContractPayload = {
+  id: string;
+  symbol?: string;
+  name?: string;
+  asset_type?: "crypto" | "tradfi";
+  position_type?: "long" | "short";
+  open_price?: number;
+  shares?: number;
+  leverage?: number;
+  fee?: number;
+  exchange?: string;
+  notes?: string;
+};
+
 export interface StockQuote {
   symbol: string;
   name: string;

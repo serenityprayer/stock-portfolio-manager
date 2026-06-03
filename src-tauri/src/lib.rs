@@ -250,6 +250,13 @@ pub fn run() {
             commands::crypto_spot::delete_crypto_spot,
             // Crypto Quotes
             commands::crypto_quotes::fetch_crypto_quotes,
+            commands::crypto_quotes::fetch_tradfi_quotes,
+            // Crypto Contract
+            commands::crypto_contract::list_crypto_contracts,
+            commands::crypto_contract::get_crypto_contract_by_id,
+            commands::crypto_contract::create_crypto_contract,
+            commands::crypto_contract::update_crypto_contract,
+            commands::crypto_contract::delete_crypto_contract,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

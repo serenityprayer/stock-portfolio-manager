@@ -32,6 +32,7 @@ const menuItems = [
   { key: "/alerts", icon: <BellOutlined />, label: "价格提醒" },
   { key: "/review", icon: <HistoryOutlined />, label: "操作复盘" },
   { key: "/crypto-spot", icon: <FundOutlined />, label: "数字资产" },
+  { key: "/crypto-contract", icon: <FundOutlined />, label: "合约持仓" },
   { key: "/settings", icon: <SettingOutlined />, label: "设置" },
 ];
 

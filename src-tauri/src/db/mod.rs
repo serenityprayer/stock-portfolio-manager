@@ -1,6 +1,7 @@
 use rusqlite::{Connection, Result};
 use std::sync::Mutex;
 
+pub mod crypto_contract;
 pub mod crypto_spot;
 
 pub struct Database {
@@ -261,6 +262,31 @@ impl Database {
                 updated_at  TEXT NOT NULL
             );
         ")?;
+
+        // Crypto contract table
+        conn.execute_batch("
+            CREATE TABLE IF NOT EXISTS crypto_contract (
+                id              TEXT PRIMARY KEY NOT NULL,
+                symbol          TEXT NOT NULL,
+                name            TEXT,
+                asset_type      TEXT NOT NULL DEFAULT 'crypto' CHECK(asset_type IN ('crypto', 'tradfi')),
+                position_type   TEXT NOT NULL CHECK(position_type IN ('long', 'short')),
+                open_price      REAL NOT NULL,
+                shares          REAL NOT NULL,
+                leverage        REAL NOT NULL DEFAULT 1,
+                margin          REAL NOT NULL,
+                fee             REAL DEFAULT 0,
+                exchange        TEXT DEFAULT 'Binance',
+                notes           TEXT,
+                created_at      TEXT NOT NULL,
+                updated_at      TEXT NOT NULL
+            );
+        ")?;
+
+        // Migrate: add asset_type column if not exists
+        let _ = conn.execute_batch("
+            ALTER TABLE crypto_contract ADD COLUMN asset_type TEXT NOT NULL DEFAULT 'crypto' CHECK(asset_type IN ('crypto', 'tradfi'));
+        ");
 
         // NOTE: xueqiu_cookie (xq_a_token) and xueqiu_u (user ID) are
         // different values – do NOT copy one into the other.  Users who

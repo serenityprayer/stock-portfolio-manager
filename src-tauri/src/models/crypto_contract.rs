@@ -1,259 +1,100 @@
-use chrono::Utc;
-use rusqlite::{params, Connection, Result as SqlResult};
 use serde::{Deserialize, Serialize};
-use uuid::Uuuid;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CryptoContract {
     pub id: String,
     pub symbol: String,
     pub name: Option<String>,
-    #[serde(rename = "positionType")]
-    pub position_type: String, // "long" or "short"
-    #[serde(rename = "entryPrice")]
-    pub entry_price: f64,
+    /// 资产类型: "crypto" 或 "tradfi"
+    pub asset_type: String,
+    /// 持仓方向: "long" 或 "short"
+    pub position_type: String,
+    /// 开仓价
+    pub open_price: f64,
+    /// 持仓数量（币/股）
     pub shares: f64,
-    pub leverage: i32,
+    /// 杠杆倍数
+    pub leverage: f64,
+    /// 保证金（自动计算：open_price * shares / leverage + fee）
     pub margin: f64,
-    #[serde(rename = "liquidationPrice")]
-    pub liquidation_price: Option<f64>,
-    #[serde(rename = "takeProfit")]
-    pub take_profit: Option<f64>,
-    #[serde(rename = "stopLoss")]
-    pub stop_loss: Option<f64>,
+    /// 手续费
+    pub fee: Option<f64>,
+    /// 交易所
     pub exchange: Option<String>,
+    /// 备注
     pub notes: Option<String>,
-    #[serde(rename = "createdAt")]
-    pub created_at: String,
-    #[serde(rename = "updatedAt")]
-    pub updated_at: String,
-    // Computed fields (not stored in DB)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_price: Option<f64>,
-    #[serde(rename = "marketValue", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub market_value: Option<f64>,
+    /// 未实现盈亏
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pnl: Option<f64>,
-    #[serde(rename = "pnlPct", skip_serializing_if = "Option::is_none")]
+    /// 收益率 (%)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pnl_pct: Option<f64>,
+    /// 强平价格（估算，仅 crypto 有强平）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub liquidation_price: Option<f64>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
-pub fn create_table(conn: &Connection) -> SqlResult<()> {
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS crypto_contract (
-            id TEXT PRIMARY KEY,
-            symbol TEXT NOT NULL,
-            name TEXT,
-            position_type TEXT NOT NULL CHECK(position_type IN ('long', 'short')),
-            entry_price REAL NOT NULL,
-            shares REAL NOT NULL,
-            leverage INTEGER NOT NULL DEFAULT 1,
-            margin REAL NOT NULL,
-            liquidation_price REAL,
-            take_profit REAL,
-            stop_loss REAL,
-            exchange TEXT,
-            notes TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )",
-        [],
-    )?;
-    Ok(())
-}
-
-pub fn create(
-    conn: &Connection,
-    symbol: &str,
-    name: Option<&str>,
-    position_type: &str,
-    entry_price: f64,
-    shares: f64,
-    leverage: i32,
-    margin: f64,
-    liquidation_price: Option<f64>,
-    take_profit: Option<f64>,
-    stop_loss: Option<f64>,
-    exchange: Option<&str>,
-    notes: Option<&str>,
-) -> SqlResult<CryptoContract> {
-    let id = Uuuid::new_v4().to_string();
-    let now = Utc::now().to_rfc3339();
-
-    conn.execute(
-        "INSERT INTO crypto_contract (
-            id, symbol, name, position_type, entry_price, shares, leverage,
-            margin, liquidation_price, take_profit, stop_loss, exchange, notes,
-            created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        params![
-            &id,
-            &symbol.to_uppercase(),
-            name,
-            &position_type.to_lowercase(),
-            &entry_price,
-            &shares,
-            &leverage,
-            &margin,
-            &liquidation_price,
-            &take_profit,
-            &stop_loss,
-            exchange,
-            notes,
-            &now,
-            &now,
-        ],
-    )?;
-
-    Ok(CryptoContract {
-        id,
-        symbol: symbol.to_uppercase(),
-        name: name.map(|s| s.to_string()),
-        position_type: position_type.to_lowercase(),
-        entry_price,
-        shares,
-        leverage,
-        margin,
-        liquidation_price,
-        take_profit,
-        stop_loss,
-        exchange: exchange.map(|s| s.to_string()),
-        notes: notes.map(|s| s.to_string()),
-        created_at: now.clone(),
-        updated_at: now,
-        current_price: None,
-        market_value: None,
-        pnl: None,
-        pnl_pct: None,
-    })
-}
-
-pub fn list(conn: &Connection) -> SqlResult<Vec<CryptoContract>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, symbol, name, position_type, entry_price, shares, leverage,
-                margin, liquidation_price, take_profit, stop_loss, exchange, notes,
-                created_at, updated_at
-         FROM crypto_contract ORDER BY created_at DESC",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok(CryptoContract {
-            id: row.get(0)?,
-            symbol: row.get(1)?,
-            name: row.get(2)?,
-            position_type: row.get(3)?,
-            entry_price: row.get(4)?,
-            shares: row.get(5)?,
-            leverage: row.get(6)?,
-            margin: row.get(7)?,
-            liquidation_price: row.get(8)?,
-            take_profit: row.get(9)?,
-            stop_loss: row.get(10)?,
-            exchange: row.get(11)?,
-            notes: row.get(12)?,
-            created_at: row.get(13)?,
-            updated_at: row.get(14)?,
-            current_price: None,
-            market_value: None,
-            pnl: None,
-            pnl_pct: None,
-        })
-    })?;
-    rows.collect()
-}
-
-pub fn get(conn: &Connection, id: &str) -> SqlResult<Option<CryptoContract>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, symbol, name, position_type, entry_price, shares, leverage,
-                margin, liquidation_price, take_profit, stop_loss, exchange, notes,
-                created_at, updated_at
-         FROM crypto_contract WHERE id = ?",
-    )?;
-    stmt.query_row(params![id], |row| {
-        Ok(CryptoContract {
-            id: row.get(0)?,
-            symbol: row.get(1)?,
-            name: row.get(2)?,
-            position_type: row.get(3)?,
-            entry_price: row.get(4)?,
-            shares: row.get(5)?,
-            leverage: row.get(6)?,
-            margin: row.get(7)?,
-            liquidation_price: row.get(8)?,
-            take_profit: row.get(9)?,
-            stop_loss: row.get(10)?,
-            exchange: row.get(11)?,
-            notes: row.get(12)?,
-            created_at: row.get(13)?,
-            updated_at: row.get(14)?,
-            current_price: None,
-            market_value: None,
-            pnl: None,
-            pnl_pct: None,
-        })
-    })
-    .map(Some)
-    .or_else(|e| {
-        if e == rusqlite::Error::QueryReturnedNoRows {
-            Ok(None)
+impl CryptoContract {
+    pub fn from_db(
+        id: String,
+        symbol: String,
+        name: Option<String>,
+        asset_type: String,
+        position_type: String,
+        open_price: f64,
+        shares: f64,
+        leverage: f64,
+        margin: f64,
+        fee: Option<f64>,
+        exchange: Option<String>,
+        notes: Option<String>,
+        created_at: String,
+        updated_at: String,
+    ) -> Self {
+        // 估算强平价格
+        // - crypto: 交易所维持保证金率约 0.5%
+        // - tradfi: 美股融资维持保证金率 50%
+        let liquidation_price = if leverage > 0.0 {
+            let maintenance_margin_rate = if asset_type == "tradfi" {
+                0.5
+            } else {
+                0.005
+            };
+            match position_type.as_str() {
+                "long" => Some(open_price * (1.0 - (1.0 / leverage) + maintenance_margin_rate)),
+                "short" => Some(open_price * (1.0 + (1.0 / leverage) + maintenance_margin_rate)),
+                _ => None,
+            }
         } else {
-            Err(e)
-        }
-    })
-}
+            None
+        };
 
-pub fn update(
-    conn: &Connection,
-    id: &str,
-    name: Option<&str>,
-    position_type: Option<&str>,
-    entry_price: Option<f64>,
-    shares: Option<f64>,
-    leverage: Option<i32>,
-    margin: Option<f64>,
-    liquidation_price: Option<f64>,
-    take_profit: Option<f64>,
-    stop_loss: Option<f64>,
-    exchange: Option<&str>,
-    notes: Option<&str>,
-) -> SqlResult<CryptoContract> {
-    let now = Utc::now().to_rfc3339();
-
-    conn.execute(
-        "UPDATE crypto_contract SET
-            name = COALESCE(?, name),
-            position_type = COALESCE(?, position_type),
-            entry_price = COALESCE(?, entry_price),
-            shares = COALESCE(?, shares),
-            leverage = COALESCE(?, leverage),
-            margin = COALESCE(?, margin),
-            liquidation_price = ?,
-            take_profit = ?,
-            stop_loss = ?,
-            exchange = ?,
-            notes = ?,
-            updated_at = ?
-         WHERE id = ?",
-        params![
+        Self {
+            id,
+            symbol,
             name,
+            asset_type,
             position_type,
-            entry_price,
+            open_price,
             shares,
             leverage,
             margin,
-            liquidation_price,
-            take_profit,
-            stop_loss,
+            fee,
             exchange,
             notes,
-            &now,
-            id,
-        ],
-    )?;
-
-    get(conn, id)?.ok_or_else(|| rusqlite::Error::QueryReturnedNoRows)
-}
-
-pub fn delete(conn: &Connection, id: &str) -> SqlResult<()> {
-    conn.execute("DELETE FROM crypto_contract WHERE id = ?", params![id])?;
-    Ok(())
+            current_price: None,
+            market_value: None,
+            pnl: None,
+            pnl_pct: None,
+            liquidation_price,
+            created_at,
+            updated_at,
+        }
+    }
 }
