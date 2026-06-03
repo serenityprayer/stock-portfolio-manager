@@ -14,6 +14,7 @@ import {
   BellOutlined,
   HistoryOutlined,
   SettingOutlined,
+  FundOutlined,
 } from "@ant-design/icons";
 
 const { Sider, Content } = Layout;
@@ -30,6 +31,7 @@ const menuItems = [
   { key: "/import", icon: <ImportOutlined />, label: "导入导出" },
   { key: "/alerts", icon: <BellOutlined />, label: "价格提醒" },
   { key: "/review", icon: <HistoryOutlined />, label: "操作复盘" },
+  { key: "/crypto-spot", icon: <FundOutlined />, label: "数字资产" },
   { key: "/settings", icon: <SettingOutlined />, label: "设置" },
 ];
 

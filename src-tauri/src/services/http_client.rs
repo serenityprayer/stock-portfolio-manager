@@ -31,14 +31,22 @@ static XUEQIU_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 /// The client is created once on first call and reused for the lifetime of the
 /// process.  It is configured with a 15-second timeout, a simple `User-Agent`
 /// header, and connection-pool settings suitable for moderate concurrency.
+///
+/// # Proxy
+/// - If `HTTP_PROXY` / `HTTPS_PROXY` env vars are set, reqwest picks them up
+///   automatically (no code change needed).
+/// - Hard-coded proxy has been removed; set the env var before launching the
+///   app if you need a proxy (e.g. for Yahoo Finance).
 pub fn general_client() -> &'static reqwest::Client {
     GENERAL_CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(Duration::from_secs(15))
+        let builder = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
             .pool_max_idle_per_host(5)
-            .pool_idle_timeout(Duration::from_secs(90))
-            .tcp_keepalive(Duration::from_secs(60))
-            .user_agent("Mozilla/5.0")
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .tcp_keepalive(std::time::Duration::from_secs(60))
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+
+        builder
             .build()
             .expect("failed to build general HTTP client")
     })

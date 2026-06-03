@@ -1,6 +1,8 @@
 use rusqlite::{Connection, Result};
 use std::sync::Mutex;
 
+pub mod crypto_spot;
+
 pub struct Database {
     pub conn: Mutex<Connection>,
 }
@@ -244,10 +246,26 @@ impl Database {
         let _ = conn.execute_batch("
             ALTER TABLE quote_provider_config ADD COLUMN xueqiu_u TEXT;
         ");
+        // Crypto spot table
+        conn.execute_batch("
+            CREATE TABLE IF NOT EXISTS crypto_spot (
+                id          TEXT PRIMARY KEY NOT NULL,
+                symbol      TEXT NOT NULL,
+                name        TEXT,
+                buy_price   REAL NOT NULL,
+                shares      REAL NOT NULL,
+                fee         REAL DEFAULT 0,
+                exchange    TEXT DEFAULT 'Binance',
+                notes       TEXT,
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT NOT NULL
+            );
+        ")?;
+
         // NOTE: xueqiu_cookie (xq_a_token) and xueqiu_u (user ID) are
         // different values – do NOT copy one into the other.  Users who
         // previously only had xueqiu_cookie set will need to enter their
-        // u value separately via the settings UI.
+        // u value separately via the settings UI;
 
         // Add per-market cost adjustment setting columns (migration).
         // CN defaults to 1 (true) because A-share investors traditionally adjust

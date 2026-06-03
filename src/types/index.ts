@@ -53,6 +53,40 @@ export interface Transaction {
   created_at: string;
 }
 
+export interface CryptoSpot {
+  id: string;
+  symbol: string;
+  name: string | null;
+  buy_price: number;
+  shares: number;
+  fee: number;
+  exchange: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type CreateCryptoSpotPayload = {
+  symbol: string;
+  name?: string;
+  buy_price: number;
+  shares: number;
+  fee?: number;
+  exchange?: string;
+  notes?: string;
+};
+
+export type UpdateCryptoSpotPayload = {
+  id: string;
+  symbol?: string;
+  name?: string;
+  buy_price?: number;
+  shares?: number;
+  fee?: number;
+  exchange?: string;
+  notes?: string;
+};
+
 export interface StockQuote {
   symbol: string;
   name: string;

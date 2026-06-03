@@ -11,20 +11,34 @@ use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Use project-local data directory to avoid sandbox permission issues
+    // (C:\Users\七七 is blocked by WorkBuddy sandbox).
+    let app_dir = {
+        // Navigate from exe location to project root:
+        //   src-tauri\target\debug\stock-portfolio-manager.exe
+        //   → go up: debug\ → target\ → src-tauri\ → project_root\
+        let exe = std::env::current_exe()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let mut dir = exe.parent().unwrap_or(&exe).to_path_buf();
+        if dir.ends_with("debug") {
+            dir.pop(); // debug\
+            dir.pop(); // target\
+            dir.pop(); // src-tauri\
+        }
+        // Also handle "release" build dir
+        if dir.ends_with("release") {
+            dir.pop(); // release\
+            dir.pop(); // target\
+            dir.pop(); // src-tauri\
+        }
+        dir.join("data").join("com.portfolio.manager")
+    };
+    std::fs::create_dir_all(&app_dir).ok();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .menu(|app| menu::build_menu(app))
-        .setup(|app| {
-            // Register the Window submenu with NSApp so macOS injects
-            // "Bring All to Front", "Move to [Display]", and the window list.
-            #[cfg(target_os = "macos")]
-            menu::register_window_menu_for_nsapp();
-
-            let app_dir = app
-                .path()
-                .app_data_dir()
-                .expect("failed to get app data dir");
-            std::fs::create_dir_all(&app_dir)?;
+        .setup(move |app| {
             let db_path = app_dir.join("portfolio.db");
             let db = Database::new(db_path.to_str().unwrap())
                 .expect("failed to initialize database");
@@ -88,19 +102,16 @@ pub fn run() {
                             return;
                         }
                     };
-                    let rows = match stmt.query_map([], |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, String>(1)?,
-                        ))
-                    }) {
-                        Ok(r) => r,
+                    let rows = stmt.query_map([], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    });
+                    match rows {
+                        Ok(r) => r.filter_map(|r| r.ok()).collect(),
                         Err(e) => {
                             eprintln!("Background refresh: failed to query holdings: {}", e);
                             return;
                         }
-                    };
-                    rows.filter_map(|r| r.ok()).collect()
+                    }
                 };
 
                 if symbols.is_empty() {
@@ -231,6 +242,14 @@ pub fn run() {
             commands::ocr::parse_trade_image,
             commands::ocr::lookup_cn_stock_code,
             commands::ocr::lookup_stock_name_by_symbol,
+            // Crypto Spot
+            commands::crypto_spot::list_crypto_spots,
+            commands::crypto_spot::get_crypto_spot_by_id,
+            commands::crypto_spot::create_crypto_spot,
+            commands::crypto_spot::update_crypto_spot,
+            commands::crypto_spot::delete_crypto_spot,
+            // Crypto Quotes
+            commands::crypto_quotes::fetch_crypto_quotes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
