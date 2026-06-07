@@ -97,4 +97,14 @@ impl CryptoContract {
             updated_at,
         }
     }
+
+    /// 计算平仓盈亏
+    /// realized_pnl = (平仓价 - 开仓价) × 平仓数量 × direction - 开仓手续费 - 平仓手续费
+    /// direction: long = +1, short = -1
+    pub fn calculate_pnl(&self, close_price: f64, close_shares: f64, close_fee: f64) -> f64 {
+        let direction = if self.position_type == "long" { 1.0 } else { -1.0 };
+        let price_diff = (close_price - self.open_price) * direction;
+        let gross_pnl = price_diff * close_shares;
+        gross_pnl - self.fee.unwrap_or(0.0) - close_fee
+    }
 }

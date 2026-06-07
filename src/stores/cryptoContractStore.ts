@@ -2,19 +2,46 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type { CryptoContract, CreateCryptoContractPayload, UpdateCryptoContractPayload } from "../types";
 
+export interface ClosedContract {
+  id: string;
+  contract_id: string;
+  symbol: string;
+  name: string | null;
+  asset_type: string;
+  position_type: string;
+  open_price: number;
+  close_price: number;
+  close_shares: number;
+  leverage: number;
+  open_fee: number;
+  close_fee: number;
+  realized_pnl: number;
+  closed_at: string;
+  notes: string | null;
+}
+
 interface CryptoContractState {
   contracts: CryptoContract[];
+  closeHistory: ClosedContract[];
   loading: boolean;
   error: string | null;
   fetchContracts: () => Promise<void>;
+  fetchCloseHistory: () => Promise<void>;
   createContract: (payload: CreateCryptoContractPayload) => Promise<CryptoContract>;
   updateContract: (payload: UpdateCryptoContractPayload) => Promise<CryptoContract>;
+  closeContract: (params: {
+    id: string;
+    closePrice: number;
+    closeShares: number;
+    closeFee?: number;
+  }) => Promise<{ remainingShares?: number; fullyClosed: boolean }>;
   deleteContract: (id: string) => Promise<void>;
   fetchQuotes: () => Promise<Record<string, { price: number; change: number; changePercent: number }>>;
 }
 
 export const useCryptoContractStore = create<CryptoContractState>((set, get) => ({
   contracts: [],
+  closeHistory: [],
   loading: false,
   error: null,
 
@@ -25,6 +52,15 @@ export const useCryptoContractStore = create<CryptoContractState>((set, get) => 
       set({ contracts, loading: false });
     } catch (err) {
       set({ error: String(err), loading: false });
+    }
+  },
+
+  fetchCloseHistory: async () => {
+    try {
+      const history = await invoke<ClosedContract[]>("list_closed_contracts");
+      set({ closeHistory: history });
+    } catch (err) {
+      console.error("Failed to fetch close history:", err);
     }
   },
 
@@ -63,6 +99,24 @@ export const useCryptoContractStore = create<CryptoContractState>((set, get) => 
       contracts: state.contracts.map((c) => (c.id === contract.id ? contract : c)),
     }));
     return contract;
+  },
+
+  closeContract: async (params) => {
+    const result = await invoke<{
+      historyId: string;
+      remainingShares?: number;
+      fullyClosed: boolean;
+    }>("close_crypto_contract", {
+      id: params.id,
+      closePrice: params.closePrice,
+      closeShares: params.closeShares,
+      closeFee: params.closeFee ?? null,
+      notes: null,
+    });
+    // 刷新列表
+    await get().fetchContracts();
+    await get().fetchCloseHistory();
+    return { remainingShares: result.remainingShares, fullyClosed: result.fullyClosed };
   },
 
   deleteContract: async (id) => {

@@ -288,6 +288,27 @@ impl Database {
             ALTER TABLE crypto_contract ADD COLUMN asset_type TEXT NOT NULL DEFAULT 'crypto' CHECK(asset_type IN ('crypto', 'tradfi'));
         ");
 
+        // Crypto contract close history table
+        conn.execute_batch("
+            CREATE TABLE IF NOT EXISTS crypto_contract_close_history (
+                id              TEXT PRIMARY KEY NOT NULL,
+                contract_id     TEXT NOT NULL,
+                symbol          TEXT NOT NULL,
+                name            TEXT,
+                asset_type      TEXT NOT NULL DEFAULT 'crypto',
+                position_type   TEXT NOT NULL,
+                open_price      REAL NOT NULL,
+                close_price     REAL NOT NULL,
+                close_shares    REAL NOT NULL,
+                leverage        REAL NOT NULL DEFAULT 1,
+                open_fee        REAL DEFAULT 0,
+                close_fee       REAL DEFAULT 0,
+                realized_pnl    REAL NOT NULL,
+                closed_at       TEXT NOT NULL,
+                notes           TEXT
+            );
+        ")?;
+
         // NOTE: xueqiu_cookie (xq_a_token) and xueqiu_u (user ID) are
         // different values – do NOT copy one into the other.  Users who
         // previously only had xueqiu_cookie set will need to enter their

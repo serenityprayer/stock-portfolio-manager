@@ -193,3 +193,46 @@ pub fn delete_crypto_contract(
     let conn = db.conn.lock().map_err(|e| e.to_string())?;
     crate::db::crypto_contract::delete(&conn, &id).map_err(|e| e.to_string())
 }
+
+/// 平仓合约（支持部分/全部平仓）
+#[tauri::command(rename_all = "camelCase")]
+pub fn close_crypto_contract(
+    db: State<Database>,
+    id: String,
+    close_price: f64,
+    close_shares: f64,
+    close_fee: Option<f64>,
+    notes: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let mut conn_guard = db.conn.lock().map_err(|e| e.to_string())?;
+    let conn: &mut Connection = &mut conn_guard;
+    let now = Utc::now().to_rfc3339();
+    let fee = close_fee.unwrap_or(0.0);
+
+    let (remaining, history_id) =
+        crate::db::crypto_contract::close_contract(
+            conn,
+            &id,
+            close_price,
+            close_shares,
+            fee,
+            notes.as_deref(),
+            &now,
+        )
+        .map_err(|e| e.to_string())?;
+
+    Ok(serde_json::json!({
+        "historyId": history_id,
+        "remainingShares": remaining.as_ref().map(|c| c.shares),
+        "fullyClosed": remaining.is_none(),
+    }))
+}
+
+/// 查询平仓历史
+#[tauri::command(rename_all = "camelCase")]
+pub fn list_closed_contracts(
+    db: State<Database>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let conn = db.conn.lock().map_err(|e| e.to_string())?;
+    crate::db::crypto_contract::list_close_history(&conn).map_err(|e| e.to_string())
+}

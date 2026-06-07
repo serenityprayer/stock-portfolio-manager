@@ -13,21 +13,26 @@ import {
   message,
   Tag,
   Radio,
+  Tabs,
+  Descriptions,
+  Statistic,
 } from "antd";
-import { PlusOutlined, DeleteOutlined, EditOutlined } from "@ant-design/icons";
+import { PlusOutlined, DeleteOutlined, EditOutlined, CloseOutlined } from "@ant-design/icons";
 import { useCryptoContractStore } from "../../stores/cryptoContractStore";
 import type { CryptoContract } from "../../types";
-import { invoke } from "@tauri-apps/api/core";
 
 const { Title, Text } = Typography;
 
 export default function CryptoContractPage() {
   const {
     contracts,
+    closeHistory,
     loading,
     fetchContracts,
+    fetchCloseHistory,
     createContract,
     updateContract,
+    closeContract,
     deleteContract,
     fetchQuotes,
   } = useCryptoContractStore();
@@ -36,9 +41,17 @@ export default function CryptoContractPage() {
   const [editingContract, setEditingContract] = useState<CryptoContract | null>(null);
   const [form] = Form.useForm();
 
+  // 平仓相关 state
+  const [closeModalOpen, setCloseModalOpen] = useState(false);
+  const [closingContract, setClosingContract] = useState<CryptoContract | null>(null);
+  const [closeShares, setCloseShares] = useState<number>(0);
+  const [closePrice, setClosePrice] = useState<number>(0);
+  const [activeTab, setActiveTab] = useState<string>("active");
+
   useEffect(() => {
     fetchContracts();
-  }, [fetchContracts]);
+    fetchCloseHistory();
+  }, [fetchContracts, fetchCloseHistory]);
 
   // 拉取行情（按 asset_type 分流）
   const loadQuotes = async () => {
@@ -71,21 +84,6 @@ export default function CryptoContractPage() {
   }) => {
     const symbolUpper = values.symbol.trim().toUpperCase();
     const assetType = values.asset_type || "crypto";
-
-    // 校验行情接口是否可访问
-    try {
-      const checkCmd = assetType === "crypto" ? "fetch_crypto_quotes" : "fetch_tradfi_quotes";
-      const check = await invoke<Record<string, { price: number }>>(checkCmd, {
-        symbols: symbolUpper,
-      });
-      if (!check[symbolUpper] || check[symbolUpper].price <= 0) {
-        message.error(`标的 ${symbolUpper} 无法获取行情，请检查代码`);
-        return;
-      }
-    } catch (err) {
-      message.error(`标的 ${symbolUpper} 无效: ${err}`);
-      return;
-    }
 
     try {
       if (editingContract) {
@@ -150,6 +148,44 @@ export default function CryptoContractPage() {
       message.error(`删除失败: ${err}`);
     }
   };
+
+  // 打平仓
+  const handleOpenCloseModal = (contract: CryptoContract) => {
+    setClosingContract(contract);
+    setCloseShares(contract.shares);
+    const q = quotes[contract.symbol];
+    setClosePrice(q ? q.price : contract.open_price);
+    setCloseModalOpen(true);
+  };
+
+  const handleCloseContract = async () => {
+    if (!closingContract) return;
+    try {
+      await closeContract({
+        id: closingContract.id,
+        closePrice: closePrice,
+        closeShares: closeShares,
+        closeFee: 0,
+      });
+      message.success(
+        closeShares >= closingContract.shares - 1e-8
+          ? "已全部平仓"
+          : `已平仓 ${closeShares}，剩余 ${(closingContract.shares - closeShares).toFixed(4)}`
+      );
+      setCloseModalOpen(false);
+      setClosingContract(null);
+    } catch (err) {
+      message.error(`平仓失败: ${err}`);
+    }
+  };
+
+  // 计算平仓预览盈亏
+  const previewPnl = closingContract
+    ? (() => {
+        const direction = closingContract.position_type === "long" ? 1 : -1;
+        return (closePrice - closingContract.open_price) * closeShares * direction;
+      })()
+    : 0;
 
   const columns = [
     {
@@ -232,28 +268,13 @@ export default function CryptoContractPage() {
       },
     },
     {
-      title: "收益率%",
-      key: "pnl_pct",
-      render: (_: unknown, record: CryptoContract) => {
-        const q = quotes[record.symbol];
-        if (!q) return "-";
-        const pnlPct = record.position_type === "long"
-          ? ((q.price - record.open_price) / record.open_price) * 100 * record.leverage
-          : ((record.open_price - q.price) / record.open_price) * 100 * record.leverage;
-        const color = pnlPct >= 0 ? "red" : "green";
-        return <Text style={{ color }}>{pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(2)}%</Text>;
-      },
-    },
-    {
-      title: "交易所",
-      dataIndex: "exchange",
-      key: "exchange",
-    },
-    {
       title: "操作",
       key: "action",
       render: (_: unknown, record: CryptoContract) => (
         <Space>
+          <Button type="link" size="small" onClick={() => handleOpenCloseModal(record)} icon={<CloseOutlined />}>
+            平仓
+          </Button>
           <Button type="link" size="small" onClick={() => handleEdit(record)} icon={<EditOutlined />}>
             编辑
           </Button>
@@ -272,6 +293,73 @@ export default function CryptoContractPage() {
     },
   ];
 
+  // 平仓历史列
+  const historyColumns = [
+    {
+      title: "标的",
+      dataIndex: "symbol",
+      key: "symbol",
+      render: (symbol: string, record: Record<string, unknown>) => (
+        <Space>
+          <Tag color={record.asset_type === "crypto" ? "blue" : "purple"}>
+            {record.asset_type === "crypto" ? "加密" : "TradFi"}
+          </Tag>
+          <Text strong>{symbol}</Text>
+          {record.name != null && <Text type="secondary">{(record.name as string)}</Text>}
+        </Space>
+      ),
+    },
+    {
+      title: "方向",
+      dataIndex: "position_type",
+      key: "position_type",
+      render: (v: string) => (
+        <Tag color={v === "long" ? "red" : "green"}>
+          {v === "long" ? "做多" : "做空"}
+        </Tag>
+      ),
+    },
+    {
+      title: "开仓价",
+      dataIndex: "open_price",
+      key: "open_price",
+      render: (v: number) => `$${v.toFixed(2)}`,
+    },
+    {
+      title: "平仓价",
+      dataIndex: "close_price",
+      key: "close_price",
+      render: (v: number) => `$${v.toFixed(2)}`,
+    },
+    {
+      title: "平仓数量",
+      dataIndex: "close_shares",
+      key: "close_shares",
+      render: (v: number) => v.toFixed(4),
+    },
+    {
+      title: "杠杆",
+      dataIndex: "leverage",
+      key: "leverage",
+      render: (v: number) => `${v}x`,
+    },
+    {
+      title: "已实现盈亏",
+      dataIndex: "realized_pnl",
+      key: "realized_pnl",
+      render: (v: number) => {
+        const color = v >= 0 ? "red" : "green";
+        return <Text style={{ color }}>{v >= 0 ? "+" : ""}{v.toFixed(2)}</Text>;
+      },
+    },
+    {
+      title: "平仓时间",
+      dataIndex: "closed_at",
+      key: "closed_at",
+      render: (v: string) => v?.slice(0, 19)?.replace("T", " "),
+    },
+  ];
+
   const totalMargin = contracts.reduce((sum, c) => sum + c.margin, 0);
   const totalPnl = contracts.reduce((sum, c) => {
     const q = quotes[c.symbol];
@@ -284,47 +372,74 @@ export default function CryptoContractPage() {
 
   return (
     <div>
-      <div className="flex justify-between items-center mb-4">
-        <Title level={2} className="!mb-0">⚡ 合约持仓</Title>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => {
-            setEditingContract(null);
-            form.resetFields();
-            form.setFieldsValue({ asset_type: "crypto", position_type: "long", leverage: 1 });
-            setModalOpen(true);
-          }}
-        >
-          添加合约
-        </Button>
-      </div>
+      <Tabs
+        activeKey={activeTab}
+        onChange={setActiveTab}
+        items={[
+          {
+            key: "active",
+            label: `持仓中 (${contracts.length})`,
+            children: (
+              <div>
+                <div className="flex justify-between items-center mb-4">
+                  <Title level={2} className="!mb-0">⚡ 合约持仓</Title>
+                  <Button
+                    type="primary"
+                    icon={<PlusOutlined />}
+                    onClick={() => {
+                      setEditingContract(null);
+                      form.resetFields();
+                      form.setFieldsValue({ asset_type: "crypto", position_type: "long", leverage: 1 });
+                      setModalOpen(true);
+                    }}
+                  >
+                    添加合约
+                  </Button>
+                </div>
 
-      <div className="grid grid-cols-3 gap-4 mb-4">
-        <div className="bg-white p-4 rounded shadow">
-          <Text type="secondary">总保证金</Text>
-          <div className="text-2xl font-bold">${totalMargin.toFixed(2)}</div>
-        </div>
-        <div className="bg-white p-4 rounded shadow">
-          <Text type="secondary">未实现盈亏</Text>
-          <div className={`text-2xl font-bold ${totalPnl >= 0 ? "text-red-500" : "text-green-500"}`}>
-            {totalPnl >= 0 ? "+" : ""}${totalPnl.toFixed(2)}
-          </div>
-        </div>
-        <div className="bg-white p-4 rounded shadow">
-          <Text type="secondary">持仓数量</Text>
-          <div className="text-2xl font-bold">{contracts.length}</div>
-        </div>
-      </div>
+                <div className="grid grid-cols-3 gap-4 mb-4">
+                  <div className="bg-white p-4 rounded shadow">
+                    <Text type="secondary">总保证金</Text>
+                    <div className="text-2xl font-bold">${totalMargin.toFixed(2)}</div>
+                  </div>
+                  <div className="bg-white p-4 rounded shadow">
+                    <Text type="secondary">未实现盈亏</Text>
+                    <div className={`text-2xl font-bold ${totalPnl >= 0 ? "text-red-500" : "text-green-500"}`}>
+                      {totalPnl >= 0 ? "+" : ""}${totalPnl.toFixed(2)}
+                    </div>
+                  </div>
+                  <div className="bg-white p-4 rounded shadow">
+                    <Text type="secondary">持仓数量</Text>
+                    <div className="text-2xl font-bold">{contracts.length}</div>
+                  </div>
+                </div>
 
-      <Table
-        dataSource={contracts}
-        columns={columns}
-        rowKey="id"
-        loading={loading}
-        pagination={false}
+                <Table
+                  dataSource={contracts}
+                  columns={columns}
+                  rowKey="id"
+                  loading={loading}
+                  pagination={false}
+                />
+              </div>
+            ),
+          },
+          {
+            key: "history",
+            label: `平仓历史 (${closeHistory.length})`,
+            children: (
+              <Table
+                dataSource={closeHistory as any[]}
+                columns={historyColumns}
+                rowKey="id"
+                pagination={{ pageSize: 20 }}
+              />
+            ),
+          },
+        ]}
       />
 
+      {/* 添加/编辑弹窗 */}
       <Modal
         title={editingContract ? "编辑合约" : "添加合约"}
         open={modalOpen}
@@ -376,6 +491,74 @@ export default function CryptoContractPage() {
             <Input.TextArea rows={2} />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* 平仓弹窗 */}
+      <Modal
+        title="合约平仓"
+        open={closeModalOpen}
+        onOk={handleCloseContract}
+        onCancel={() => {
+          setCloseModalOpen(false);
+          setClosingContract(null);
+        }}
+        okText="确认平仓"
+        cancelText="取消"
+        okButtonProps={{ danger: true }}
+        width={500}
+      >
+        {closingContract && (
+          <div>
+            <Descriptions column={2} size="small" bordered className="mb-4">
+              <Descriptions.Item label="标的">{closingContract.symbol}</Descriptions.Item>
+              <Descriptions.Item label="方向">
+                <Tag color={closingContract.position_type === "long" ? "red" : "green"}>
+                  {closingContract.position_type === "long" ? "做多" : "做空"}
+                </Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="开仓价">${closingContract.open_price.toFixed(2)}</Descriptions.Item>
+              <Descriptions.Item label="持仓数量">{closingContract.shares.toFixed(4)}</Descriptions.Item>
+              <Descriptions.Item label="杠杆">{closingContract.leverage}x</Descriptions.Item>
+              <Descriptions.Item label="现价">
+                ${quotes[closingContract.symbol]?.price.toFixed(2) ?? "-"}
+              </Descriptions.Item>
+            </Descriptions>
+
+            <div className="space-y-3 mt-4">
+              <div>
+                <Text>平仓数量：</Text>
+                <InputNumber
+                  min={0.0001}
+                  max={closingContract.shares}
+                  step={closingContract.shares < 1 ? 0.0001 : 1}
+                  value={closeShares}
+                  onChange={(v) => setCloseShares(v ?? 0)}
+                  style={{ width: "100%" }}
+                />
+              </div>
+              <div>
+                <Text>平仓价格：</Text>
+                <InputNumber
+                  min={0}
+                  step={0.01}
+                  value={closePrice}
+                  onChange={(v) => setClosePrice(v ?? 0)}
+                  style={{ width: "100%" }}
+                  addonAfter="$"
+                />
+              </div>
+              <div className="p-3 bg-gray-50 rounded">
+                <Statistic
+                  title="预估盈亏"
+                  value={previewPnl}
+                  precision={2}
+                  prefix={previewPnl >= 0 ? "+$" : "-$"}
+                  valueStyle={{ color: previewPnl >= 0 ? "#f5222d" : "#52c41a" }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );
