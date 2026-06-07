@@ -35,6 +35,12 @@ interface CryptoContractState {
     closeShares: number;
     closeFee?: number;
   }) => Promise<{ remainingShares?: number; fullyClosed: boolean }>;
+  addPosition: (params: {
+    id: string;
+    addShares: number;
+    addPrice: number;
+    addFee?: number;
+  }) => Promise<CryptoContract>;
   deleteContract: (id: string) => Promise<void>;
   fetchQuotes: () => Promise<Record<string, { price: number; change: number; changePercent: number }>>;
 }
@@ -117,6 +123,19 @@ export const useCryptoContractStore = create<CryptoContractState>((set, get) => 
     await get().fetchContracts();
     await get().fetchCloseHistory();
     return { remainingShares: result.remainingShares, fullyClosed: result.fullyClosed };
+  },
+
+  addPosition: async (params) => {
+    const contract = await invoke<CryptoContract>("add_crypto_position", {
+      id: params.id,
+      addShares: params.addShares,
+      addPrice: params.addPrice,
+      addFee: params.addFee ?? null,
+    });
+    set((state) => ({
+      contracts: state.contracts.map((c) => (c.id === contract.id ? contract : c)),
+    }));
+    return contract;
   },
 
   deleteContract: async (id) => {

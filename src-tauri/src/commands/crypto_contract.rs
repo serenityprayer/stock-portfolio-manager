@@ -1,5 +1,6 @@
 use crate::db::Database;
 use crate::models::crypto_contract::CryptoContract;
+use rusqlite::Connection;
 use tauri::State;
 use uuid::Uuid;
 use chrono::Utc;
@@ -235,4 +236,27 @@ pub fn list_closed_contracts(
 ) -> Result<Vec<serde_json::Value>, String> {
     let conn = db.conn.lock().map_err(|e| e.to_string())?;
     crate::db::crypto_contract::list_close_history(&conn).map_err(|e| e.to_string())
+}
+
+/// 加仓：在现有合约上追加仓位，重新计算加权平均开仓价
+#[tauri::command(rename_all = "camelCase")]
+pub fn add_crypto_position(
+    db: State<Database>,
+    id: String,
+    add_shares: f64,
+    add_price: f64,
+    add_fee: Option<f64>,
+) -> Result<CryptoContract, String> {
+    let conn = db.conn.lock().map_err(|e| e.to_string())?;
+    let now = Utc::now().to_rfc3339();
+    let fee = add_fee.unwrap_or(0.0);
+    crate::db::crypto_contract::add_position(
+        &conn,
+        &id,
+        add_shares,
+        add_price,
+        fee,
+        &now,
+    )
+    .map_err(|e| e.to_string())
 }

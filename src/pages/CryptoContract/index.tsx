@@ -32,6 +32,7 @@ export default function CryptoContractPage() {
     fetchCloseHistory,
     createContract,
     updateContract,
+    addPosition,
     closeContract,
     deleteContract,
     fetchQuotes,
@@ -46,6 +47,13 @@ export default function CryptoContractPage() {
   const [closingContract, setClosingContract] = useState<CryptoContract | null>(null);
   const [closeShares, setCloseShares] = useState<number>(0);
   const [closePrice, setClosePrice] = useState<number>(0);
+
+  // 加仓相关 state
+  const [addModalOpen, setAddModalOpen] = useState(false);
+  const [addingContract, setAddingContract] = useState<CryptoContract | null>(null);
+  const [addShares, setAddShares] = useState<number>(0);
+  const [addPrice, setAddPrice] = useState<number>(0);
+  const [addFee, setAddFee] = useState<number>(0);
   const [activeTab, setActiveTab] = useState<string>("active");
 
   useEffect(() => {
@@ -179,7 +187,40 @@ export default function CryptoContractPage() {
     }
   };
 
-  // 计算平仓预览盈亏
+  // 加仓
+  const handleOpenAddModal = (contract: CryptoContract) => {
+    setAddingContract(contract);
+    setAddShares(0);
+    const q = quotes[contract.symbol];
+    setAddPrice(q ? q.price : contract.open_price);
+    setAddFee(0);
+    setAddModalOpen(true);
+  };
+
+  const handleAddPosition = async () => {
+    if (!addingContract) return;
+    try {
+      await addPosition({
+        id: addingContract.id,
+        addShares,
+        addPrice: addPrice,
+        addFee: addFee,
+      });
+      message.success("加仓成功，已重新计算平均开仓价");
+      setAddModalOpen(false);
+      setAddingContract(null);
+    } catch (err) {
+      message.error(`加仓失败: ${err}`);
+    }
+  };
+
+  // 计算加仓后预览
+  const previewAvgPrice = addingContract
+    ? (
+        (addingContract.open_price * addingContract.shares + addPrice * addShares) /
+        (addingContract.shares + addShares)
+      ).toFixed(2)
+    : "-";
   const previewPnl = closingContract
     ? (() => {
         const direction = closingContract.position_type === "long" ? 1 : -1;
@@ -269,27 +310,30 @@ export default function CryptoContractPage() {
     },
     {
       title: "操作",
-      key: "action",
-      render: (_: unknown, record: CryptoContract) => (
-        <Space>
-          <Button type="link" size="small" onClick={() => handleOpenCloseModal(record)} icon={<CloseOutlined />}>
-            平仓
+    key: "action",
+    render: (_: unknown, record: CryptoContract) => (
+      <Space>
+        <Button type="link" size="small" onClick={() => handleOpenAddModal(record)}>
+          加仓
+        </Button>
+        <Button type="link" size="small" onClick={() => handleOpenCloseModal(record)}>
+          平仓
+        </Button>
+        <Button type="link" size="small" onClick={() => handleEdit(record)}>
+          编辑
+        </Button>
+        <Popconfirm
+          title="确认删除？"
+          onConfirm={() => handleDelete(record.id)}
+          okText="确认"
+          cancelText="取消"
+        >
+          <Button type="link" size="small" danger>
+            删除
           </Button>
-          <Button type="link" size="small" onClick={() => handleEdit(record)} icon={<EditOutlined />}>
-            编辑
-          </Button>
-          <Popconfirm
-            title="确认删除？"
-            onConfirm={() => handleDelete(record.id)}
-            okText="确认"
-            cancelText="取消"
-          >
-            <Button type="link" size="small" danger icon={<DeleteOutlined />}>
-              删除
-            </Button>
-          </Popconfirm>
-        </Space>
-      ),
+        </Popconfirm>
+      </Space>
+    ),
     },
   ];
 
@@ -555,6 +599,74 @@ export default function CryptoContractPage() {
                   prefix={previewPnl >= 0 ? "+$" : "-$"}
                   valueStyle={{ color: previewPnl >= 0 ? "#f5222d" : "#52c41a" }}
                 />
+              </div>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* 加仓弹窗 */}
+      <Modal
+        title="加仓"
+        open={addModalOpen}
+        onOk={handleAddPosition}
+        onCancel={() => {
+          setAddModalOpen(false);
+          setAddingContract(null);
+        }}
+        okText="确认加仓"
+        cancelText="取消"
+        width={500}
+      >
+        {addingContract && (
+          <div>
+            <Descriptions column={2} size="small" bordered className="mb-4">
+              <Descriptions.Item label="标的">{addingContract.symbol}</Descriptions.Item>
+              <Descriptions.Item label="方向">
+                <Tag color={addingContract.position_type === "long" ? "red" : "green"}>
+                  {addingContract.position_type === "long" ? "做多" : "做空"}
+                </Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="当前开仓价">${addingContract.open_price.toFixed(2)}</Descriptions.Item>
+              <Descriptions.Item label="当前数量">{addingContract.shares.toFixed(4)}</Descriptions.Item>
+              <Descriptions.Item label="杠杆">{addingContract.leverage}x</Descriptions.Item>
+            </Descriptions>
+
+            <div className="space-y-3 mt-4">
+              <div>
+                <Text>加仓数量：</Text>
+                <InputNumber
+                  min={0.0001}
+                  step={addingContract.shares < 1 ? 0.0001 : 1}
+                  value={addShares}
+                  onChange={(v) => setAddShares(v ?? 0)}
+                  style={{ width: "100%" }}
+                />
+              </div>
+              <div>
+                <Text>加仓价格：</Text>
+                <InputNumber
+                  min={0}
+                  step={0.01}
+                  value={addPrice}
+                  onChange={(v) => setAddPrice(v ?? 0)}
+                  style={{ width: "100%" }}
+                  addonAfter="$"
+                />
+              </div>
+              <div>
+                <Text>手续费（USD）：</Text>
+                <InputNumber
+                  min={0}
+                  step={0.01}
+                  value={addFee}
+                  onChange={(v) => setAddFee(v ?? 0)}
+                  style={{ width: "100%" }}
+                />
+              </div>
+              <div className="p-3 bg-gray-50 rounded">
+                <Text type="secondary">加仓后加权平均开仓价：</Text>
+                <div className="text-lg font-bold">${previewAvgPrice}</div>
               </div>
             </div>
           </div>

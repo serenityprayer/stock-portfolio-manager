@@ -117,6 +117,65 @@ pub fn delete(conn: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// 加仓：在现有合约上追加仓位，重新计算加权平均开仓价
+pub fn add_position(
+    conn: &Connection,
+    contract_id: &str,
+    add_shares: f64,
+    add_price: f64,
+    add_fee: f64,
+    updated_at: &str,
+) -> Result<CryptoContract> {
+    // 1. 读取原合约
+    let mut stmt = conn.prepare(
+        "SELECT id, symbol, name, asset_type, position_type, open_price, shares,
+                leverage, margin, fee, exchange, notes, created_at, updated_at
+         FROM crypto_contract WHERE id = ?1"
+    )?;
+    let mut rows = stmt.query_map(params![contract_id], |row| {
+        Ok(CryptoContract::from_db(
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+            row.get(5)?,
+            row.get(6)?,
+            row.get(7)?,
+            row.get(8)?,
+            row.get(9)?,
+            row.get(10)?,
+            row.get(11)?,
+            row.get(12)?,
+            row.get(13)?,
+        ))
+    })?;
+    let contract = rows.next().transpose()?.ok_or_else(|| rusqlite::Error::InvalidQuery)?;
+
+    // 2. 计算加权平均开仓价
+    let old_notional = contract.open_price * contract.shares;
+    let add_notional = add_price * add_shares;
+    let total_shares = contract.shares + add_shares;
+    let avg_open_price = (old_notional + add_notional) / total_shares;
+
+    // 3. 累加手续费
+    let total_fee = contract.fee.unwrap_or(0.0) + add_fee;
+
+    // 4. 重新计算保证金
+    let margin = (avg_open_price * total_shares) / contract.leverage + total_fee;
+
+    // 5. 更新数据库
+    conn.execute(
+        "UPDATE crypto_contract SET
+            open_price=?2, shares=?3, margin=?4, fee=?5, updated_at=?6
+         WHERE id=?1",
+        params![contract_id, avg_open_price, total_shares, margin, total_fee, updated_at],
+    )?;
+
+    // 6. 返回更新后的合约
+    get_by_id(conn, contract_id)
+}
+
 /// 平仓操作：
 /// - 部分平仓：减少 shares，写入平仓历史
 /// - 全部平仓：删除合约记录，写入平仓历史
@@ -134,7 +193,7 @@ pub fn close_contract(
 
     let tx = conn.transaction()?;
 
-    // 1. 读取原合约（放到独立作用域，让 stmt 先 drop）
+    // 1. 读取原合约
     let contract = {
         let mut stmt = tx.prepare(
             "SELECT id, symbol, name, asset_type, position_type, open_price, shares,
@@ -159,8 +218,8 @@ pub fn close_contract(
                 row.get(13)?,
             ))
         })?;
-        rows.next().transpose()?
-    }?;
+        rows.next().transpose()?.ok_or_else(|| rusqlite::Error::InvalidQuery)?
+    };
 
     let history_id = Uuid::new_v4().to_string();
     let realized_pnl = contract.calculate_pnl(close_price, close_shares, close_fee);
