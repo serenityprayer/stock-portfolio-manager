@@ -548,6 +548,71 @@ impl Database {
               );
         ");
 
+        // 尝试从备份表恢复数据（防御性：主表为空且备份表存在时）
+        {
+            let main_count: i32 = conn.query_row(
+                "SELECT COUNT(*) FROM crypto_contract_history", [], |r| r.get(0)
+            ).unwrap_or(0);
+
+            if main_count == 0 {
+                for &bk_table in &["_crypto_contract_history_bk", "_crypto_contract_close_history_bk"] {
+                    let exists: bool = conn.query_row(
+                        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name=?1",
+                        params![bk_table],
+                        |r| r.get(0)
+                    ).unwrap_or(false);
+
+                    if exists {
+                        eprintln!("Found backup table {}, attempting recovery...", bk_table);
+                        let sql = format!(
+                            "INSERT OR IGNORE INTO crypto_contract_history SELECT * FROM {}",
+                            bk_table
+                        );
+                        match conn.execute(&sql, []) {
+                            Ok(n) => {
+                                eprintln!("Recovered {} rows from {}", n, bk_table);
+                                break;
+                            },
+                            Err(e) => {
+                                eprintln!("Recovery from {} failed ({}), trying column mapping...", bk_table, e);
+                                let bk_cols: Vec<String> = conn.prepare(
+                                    &format!("PRAGMA table_info({})", bk_table)
+                                ).and_then(|mut s| {
+                                    let rows = s.query_map([], |row| row.get::<_, String>(1))?;
+                                    rows.collect::<Result<Vec<_>, _>>()
+                                }).unwrap_or_else(|_| vec![]);
+
+                                let want_cols = [
+                                    "id", "contract_id", "symbol", "name", "asset_type",
+                                    "position_type", "action_type", "open_price",
+                                    "close_price", "close_shares",
+                                    "add_price", "add_shares",
+                                    "new_avg_price", "new_total_shares",
+                                    "leverage", "open_fee", "close_fee",
+                                    "realized_pnl", "return_rate", "closed_at", "notes",
+                                ];
+                                let common: Vec<&str> = want_cols.iter()
+                                    .filter(|c| bk_cols.iter().any(|b| b == *c))
+                                    .copied()
+                                    .collect();
+                                if !common.is_empty() {
+                                    let col_list = common.join(", ");
+                                    let sql2 = format!(
+                                        "INSERT OR IGNORE INTO crypto_contract_history ({}) SELECT {} FROM {}",
+                                        col_list, col_list, bk_table
+                                    );
+                                    if conn.execute(&sql2, []).is_ok() {
+                                        eprintln!("Recovery succeeded with column mapping from {}", bk_table);
+                                        break;
+                                    }
+                                }
+                            },
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 }
