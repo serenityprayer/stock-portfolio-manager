@@ -2,31 +2,37 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type { CryptoContract, CreateCryptoContractPayload, UpdateCryptoContractPayload } from "../types";
 
-export interface ClosedContract {
+export interface ContractHistory {
   id: string;
   contract_id: string;
   symbol: string;
   name: string | null;
   asset_type: string;
   position_type: string;
+  action_type: string;
   open_price: number;
-  close_price: number;
-  close_shares: number;
+  close_price: number | null;
+  close_shares: number | null;
+  add_price: number | null;
+  add_shares: number | null;
+  new_avg_price: number | null;
+  new_total_shares: number | null;
   leverage: number;
   open_fee: number;
   close_fee: number;
-  realized_pnl: number;
+  realized_pnl: number | null;
+  return_rate: number | null;
   closed_at: string;
   notes: string | null;
 }
 
 interface CryptoContractState {
   contracts: CryptoContract[];
-  closeHistory: ClosedContract[];
+  contractHistory: ContractHistory[];
   loading: boolean;
   error: string | null;
   fetchContracts: () => Promise<void>;
-  fetchCloseHistory: () => Promise<void>;
+  fetchContractHistory: () => Promise<void>;
   createContract: (payload: CreateCryptoContractPayload) => Promise<CryptoContract>;
   updateContract: (payload: UpdateCryptoContractPayload) => Promise<CryptoContract>;
   closeContract: (params: {
@@ -47,7 +53,7 @@ interface CryptoContractState {
 
 export const useCryptoContractStore = create<CryptoContractState>((set, get) => ({
   contracts: [],
-  closeHistory: [],
+  contractHistory: [],
   loading: false,
   error: null,
 
@@ -61,12 +67,12 @@ export const useCryptoContractStore = create<CryptoContractState>((set, get) => 
     }
   },
 
-  fetchCloseHistory: async () => {
+  fetchContractHistory: async () => {
     try {
-      const history = await invoke<ClosedContract[]>("list_closed_contracts");
-      set({ closeHistory: history });
+      const history = await invoke<ContractHistory[]>("list_contract_history");
+      set({ contractHistory: history });
     } catch (err) {
-      console.error("Failed to fetch close history:", err);
+      console.error("Failed to fetch contract history:", err);
     }
   },
 
@@ -119,9 +125,8 @@ export const useCryptoContractStore = create<CryptoContractState>((set, get) => 
       closeFee: params.closeFee ?? null,
       notes: null,
     });
-    // 刷新列表
     await get().fetchContracts();
-    await get().fetchCloseHistory();
+    await get().fetchContractHistory();
     return { remainingShares: result.remainingShares, fullyClosed: result.fullyClosed };
   },
 
@@ -135,6 +140,7 @@ export const useCryptoContractStore = create<CryptoContractState>((set, get) => 
     set((state) => ({
       contracts: state.contracts.map((c) => (c.id === contract.id ? contract : c)),
     }));
+    await get().fetchContractHistory();
     return contract;
   },
 

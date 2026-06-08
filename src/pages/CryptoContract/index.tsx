@@ -19,17 +19,17 @@ import {
 } from "antd";
 import { PlusOutlined, DeleteOutlined, EditOutlined, CloseOutlined } from "@ant-design/icons";
 import { useCryptoContractStore } from "../../stores/cryptoContractStore";
-import type { CryptoContract } from "../../types";
+import type { CryptoContract, ContractHistory } from "../../types";
 
 const { Title, Text } = Typography;
 
 export default function CryptoContractPage() {
   const {
     contracts,
-    closeHistory,
+    contractHistory,
     loading,
     fetchContracts,
-    fetchCloseHistory,
+    fetchContractHistory,
     createContract,
     updateContract,
     addPosition,
@@ -58,8 +58,8 @@ export default function CryptoContractPage() {
 
   useEffect(() => {
     fetchContracts();
-    fetchCloseHistory();
-  }, [fetchContracts, fetchCloseHistory]);
+    fetchContractHistory();
+  }, [fetchContracts, fetchContractHistory]);
 
   // 拉取行情（按 asset_type 分流）
   const loadQuotes = async () => {
@@ -310,35 +310,46 @@ export default function CryptoContractPage() {
     },
     {
       title: "操作",
-    key: "action",
-    render: (_: unknown, record: CryptoContract) => (
-      <Space>
-        <Button type="link" size="small" onClick={() => handleOpenAddModal(record)}>
-          加仓
-        </Button>
-        <Button type="link" size="small" onClick={() => handleOpenCloseModal(record)}>
-          平仓
-        </Button>
-        <Button type="link" size="small" onClick={() => handleEdit(record)}>
-          编辑
-        </Button>
-        <Popconfirm
-          title="确认删除？"
-          onConfirm={() => handleDelete(record.id)}
-          okText="确认"
-          cancelText="取消"
-        >
-          <Button type="link" size="small" danger>
-            删除
+      key: "action",
+      render: (_: unknown, record: CryptoContract) => (
+        <Space>
+          <Button type="link" size="small" onClick={() => handleOpenAddModal(record)}>
+            加仓
           </Button>
-        </Popconfirm>
-      </Space>
-    ),
+          <Button type="link" size="small" onClick={() => handleOpenCloseModal(record)}>
+            平仓
+          </Button>
+          <Button type="link" size="small" onClick={() => handleEdit(record)}>
+            编辑
+          </Button>
+          <Popconfirm
+            title="确认删除？"
+            onConfirm={() => handleDelete(record.id)}
+            okText="确认"
+            cancelText="取消"
+          >
+            <Button type="link" size="small" danger>
+              删除
+            </Button>
+          </Popconfirm>
+        </Space>
+      ),
     },
   ];
 
-  // 平仓历史列
+  // 成交历史列
   const historyColumns = [
+    {
+      title: "类型",
+      dataIndex: "action_type",
+      key: "action_type",
+      width: 80,
+      render: (v: string) => (
+        <Tag color={v === "close" ? "orange" : "blue"}>
+          {v === "close" ? "平仓" : "加仓"}
+        </Tag>
+      ),
+    },
     {
       title: "标的",
       dataIndex: "symbol",
@@ -364,22 +375,72 @@ export default function CryptoContractPage() {
       ),
     },
     {
-      title: "开仓价",
-      dataIndex: "open_price",
-      key: "open_price",
-      render: (v: number) => `$${v.toFixed(2)}`,
-    },
-    {
       title: "平仓价",
-      dataIndex: "close_price",
       key: "close_price",
-      render: (v: number) => `$${v.toFixed(2)}`,
+      render: (_: unknown, record: Record<string, unknown>) =>
+        record.action_type === "close" && record.close_price != null
+          ? `$${(record.close_price as number).toFixed(2)}`
+          : "-",
     },
     {
       title: "平仓数量",
-      dataIndex: "close_shares",
       key: "close_shares",
-      render: (v: number) => v.toFixed(4),
+      render: (_: unknown, record: Record<string, unknown>) =>
+        record.action_type === "close" && record.close_shares != null
+          ? (record.close_shares as number).toFixed(4)
+          : "-",
+    },
+    {
+      title: "加仓价",
+      key: "add_price",
+      render: (_: unknown, record: Record<string, unknown>) =>
+        record.action_type === "add" && record.add_price != null
+          ? `$${(record.add_price as number).toFixed(2)}`
+          : "-",
+    },
+    {
+      title: "加仓数量",
+      key: "add_shares",
+      render: (_: unknown, record: Record<string, unknown>) =>
+        record.action_type === "add" && record.add_shares != null
+          ? `+${(record.add_shares as number).toFixed(4)}`
+          : "-",
+    },
+    {
+      title: "新均价",
+      key: "new_avg_price",
+      render: (_: unknown, record: Record<string, unknown>) =>
+        record.new_avg_price != null
+          ? `$${(record.new_avg_price as number).toFixed(2)}`
+          : "-",
+    },
+    {
+      title: "新总仓位",
+      key: "new_total_shares",
+      render: (_: unknown, record: Record<string, unknown>) =>
+        record.new_total_shares != null
+          ? (record.new_total_shares as number).toFixed(4)
+          : "-",
+    },
+    {
+      title: "已实现盈亏",
+      key: "realized_pnl",
+      render: (_: unknown, record: Record<string, unknown>) => {
+        if (record.action_type !== "close" || record.realized_pnl == null) return "-";
+        const v = record.realized_pnl as number;
+        const color = v >= 0 ? "red" : "green";
+        return <Text style={{ color }}>{v >= 0 ? "+" : ""}{v.toFixed(2)}</Text>;
+      },
+    },
+    {
+      title: "回报率",
+      key: "return_rate",
+      render: (_: unknown, record: Record<string, unknown>) => {
+        if (record.action_type !== "close" || record.return_rate == null) return "-";
+        const v = record.return_rate as number;
+        const color = v >= 0 ? "red" : "green";
+        return <Text style={{ color }}>{v >= 0 ? "+" : ""}{(v * 100).toFixed(2)}%</Text>;
+      },
     },
     {
       title: "杠杆",
@@ -388,16 +449,7 @@ export default function CryptoContractPage() {
       render: (v: number) => `${v}x`,
     },
     {
-      title: "已实现盈亏",
-      dataIndex: "realized_pnl",
-      key: "realized_pnl",
-      render: (v: number) => {
-        const color = v >= 0 ? "red" : "green";
-        return <Text style={{ color }}>{v >= 0 ? "+" : ""}{v.toFixed(2)}</Text>;
-      },
-    },
-    {
-      title: "平仓时间",
+      title: "时间",
       dataIndex: "closed_at",
       key: "closed_at",
       render: (v: string) => v?.slice(0, 19)?.replace("T", " "),
@@ -470,10 +522,10 @@ export default function CryptoContractPage() {
           },
           {
             key: "history",
-            label: `平仓历史 (${closeHistory.length})`,
+            label: `成交历史 (${contractHistory.length})`,
             children: (
               <Table
-                dataSource={closeHistory as any[]}
+                dataSource={contractHistory as any[]}
                 columns={historyColumns}
                 rowKey="id"
                 pagination={{ pageSize: 20 }}

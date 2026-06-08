@@ -259,7 +259,7 @@ pub fn run() {
             commands::crypto_contract::delete_crypto_contract,
             commands::crypto_contract::close_crypto_contract,
             commands::crypto_contract::add_crypto_position,
-            commands::crypto_contract::list_closed_contracts,
+            commands::crypto_contract::list_contract_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

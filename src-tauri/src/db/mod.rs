@@ -309,6 +309,26 @@ impl Database {
             );
         ")?;
 
+        // Migrate: add fields to crypto_contract_close_history for 成交历史
+        let _ = conn.execute_batch("
+            ALTER TABLE crypto_contract_close_history ADD COLUMN action_type TEXT NOT NULL DEFAULT 'close';
+        ");
+        let _ = conn.execute_batch("
+            ALTER TABLE crypto_contract_close_history ADD COLUMN add_price REAL;
+        ");
+        let _ = conn.execute_batch("
+            ALTER TABLE crypto_contract_close_history ADD COLUMN add_shares REAL;
+        ");
+        let _ = conn.execute_batch("
+            ALTER TABLE crypto_contract_close_history ADD COLUMN new_avg_price REAL;
+        ");
+        let _ = conn.execute_batch("
+            ALTER TABLE crypto_contract_close_history ADD COLUMN new_total_shares REAL;
+        ");
+        let _ = conn.execute_batch("
+            ALTER TABLE crypto_contract_close_history ADD COLUMN return_rate REAL;
+        ");
+
         // NOTE: xueqiu_cookie (xq_a_token) and xueqiu_u (user ID) are
         // different values – do NOT copy one into the other.  Users who
         // previously only had xueqiu_cookie set will need to enter their

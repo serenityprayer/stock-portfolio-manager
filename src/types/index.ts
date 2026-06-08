@@ -136,6 +136,30 @@ export type UpdateCryptoContractPayload = {
   notes?: string;
 };
 
+export interface ContractHistory {
+  id: string;
+  contract_id: string;
+  symbol: string;
+  name: string | null;
+  asset_type: string;
+  position_type: string;
+  action_type: string;
+  open_price: number;
+  close_price: number | null;
+  close_shares: number | null;
+  add_price: number | null;
+  add_shares: number | null;
+  new_avg_price: number | null;
+  new_total_shares: number | null;
+  leverage: number;
+  open_fee: number;
+  close_fee: number;
+  realized_pnl: number | null;
+  return_rate: number | null;
+  closed_at: string;
+  notes: string | null;
+}
+
 export interface StockQuote {
   symbol: string;
   name: string;

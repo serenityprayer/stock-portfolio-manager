@@ -229,13 +229,13 @@ pub fn close_crypto_contract(
     }))
 }
 
-/// 查询平仓历史
+/// 查询成交历史（平仓 + 加仓）
 #[tauri::command(rename_all = "camelCase")]
-pub fn list_closed_contracts(
+pub fn list_contract_history(
     db: State<Database>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let conn = db.conn.lock().map_err(|e| e.to_string())?;
-    crate::db::crypto_contract::list_close_history(&conn).map_err(|e| e.to_string())
+    crate::db::crypto_contract::list_contract_history(&conn).map_err(|e| e.to_string())
 }
 
 /// 加仓：在现有合约上追加仓位，重新计算加权平均开仓价
