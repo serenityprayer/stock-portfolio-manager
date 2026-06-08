@@ -363,6 +363,71 @@ impl Database {
             }
         }
 
+        // 重建 crypto_contract_close_history，去除 close_price/close_shares/realized_pnl 的 NOT NULL 约束
+        {
+            // 1. 备份旧表
+            let _ = conn.execute_batch("ALTER TABLE crypto_contract_close_history RENAME TO _crypto_contract_close_history_bk;");
+
+            // 2. 新建表（close_price/close_shares/realized_pnl 改为可空）
+            conn.execute_batch("
+                CREATE TABLE crypto_contract_close_history (
+                    id              TEXT PRIMARY KEY NOT NULL,
+                    contract_id     TEXT NOT NULL,
+                    symbol          TEXT NOT NULL,
+                    name            TEXT,
+                    asset_type      TEXT NOT NULL DEFAULT 'crypto',
+                    position_type   TEXT NOT NULL,
+                    action_type     TEXT NOT NULL DEFAULT 'close',
+                    open_price      REAL NOT NULL,
+                    close_price     REAL,
+                    close_shares    REAL,
+                    add_price       REAL,
+                    add_shares     REAL,
+                    new_avg_price   REAL,
+                    new_total_shares REAL,
+                    leverage        REAL NOT NULL DEFAULT 1,
+                    open_fee        REAL DEFAULT 0,
+                    close_fee       REAL DEFAULT 0,
+                    realized_pnl    REAL,
+                    return_rate     REAL,
+                    closed_at       TEXT NOT NULL,
+                    notes           TEXT
+                );
+            ")?;
+
+            // 3. 迁移旧数据（兼容可能没有 return_rate 字段的老记录）
+            let has_return_rate = conn.prepare(
+                "SELECT COUNT(*) FROM pragma_table_info('crypto_contract_close_history') WHERE name='return_rate'"
+            ).map(|mut s| {
+                s.query_row([], |r| r.get::<_, i32>(0)).unwrap_or(0) > 0
+            }).unwrap_or(false);
+
+            if has_return_rate {
+                conn.execute_batch("
+                    INSERT INTO crypto_contract_close_history
+                    SELECT id, contract_id, symbol, name, asset_type, position_type,
+                           'close' as action_type, open_price, close_price, close_shares,
+                           NULL, NULL, NULL, NULL,
+                           leverage, open_fee, close_fee, realized_pnl,
+                           return_rate, closed_at, notes
+                    FROM _crypto_contract_close_history_bk;
+                ")?;
+            } else {
+                conn.execute_batch("
+                    INSERT INTO crypto_contract_close_history
+                    SELECT id, contract_id, symbol, name, asset_type, position_type,
+                           'close' as action_type, open_price, close_price, close_shares,
+                           NULL, NULL, NULL, NULL,
+                           leverage, open_fee, close_fee, realized_pnl,
+                           NULL, closed_at, notes
+                    FROM _crypto_contract_close_history_bk;
+                ")?;
+            }
+
+            // 4. 删掉备份表
+            let _ = conn.execute_batch("DROP TABLE _crypto_contract_close_history_bk;");
+        }
+
         // NOTE: xueqiu_cookie (xq_a_token) and xueqiu_u (user ID) are
         // different values – do NOT copy one into the other.  Users who
         // previously only had xueqiu_cookie set will need to enter their
