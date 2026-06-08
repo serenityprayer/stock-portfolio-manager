@@ -1,4 +1,4 @@
-use rusqlite::{Connection, Result};
+use rusqlite::{params, Connection, Result};
 use std::sync::Mutex;
 
 pub mod crypto_contract;
@@ -328,6 +328,40 @@ impl Database {
         let _ = conn.execute_batch("
             ALTER TABLE crypto_contract_close_history ADD COLUMN return_rate REAL;
         ");
+
+        // 补算历史平仓记录的 return_rate（之前创建的记录该字段为 NULL）
+        {
+            let mut stmt = conn.prepare(
+                "SELECT id, open_price, close_shares, leverage, open_fee, close_fee, realized_pnl
+                 FROM crypto_contract_close_history
+                 WHERE action_type = 'close' AND return_rate IS NULL"
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, f64>(2)?,
+                    row.get::<_, f64>(3)?,
+                    row.get::<_, f64>(4)?,
+                    row.get::<_, f64>(5)?,
+                    row.get::<_, f64>(6)?,
+                ))
+            })?;
+            for row in rows {
+                let (id, open_price, close_shares, leverage, open_fee, close_fee, realized_pnl) =
+                    row.map_err(|e| rusqlite::Error::from(e))?;
+                let margin = open_price * close_shares / leverage + open_fee + close_fee;
+                let return_rate = if margin.abs() > 1e-8 {
+                    realized_pnl / margin
+                } else {
+                    0.0
+                };
+                conn.execute(
+                    "UPDATE crypto_contract_close_history SET return_rate = ?1 WHERE id = ?2",
+                    params![return_rate, id],
+                )?;
+            }
+        }
 
         // NOTE: xueqiu_cookie (xq_a_token) and xueqiu_u (user ID) are
         // different values – do NOT copy one into the other.  Users who
