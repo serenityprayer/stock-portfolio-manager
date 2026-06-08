@@ -257,11 +257,11 @@ pub fn close_contract(
     let realized_pnl = contract.calculate_pnl(close_price, close_shares, close_fee);
 
     // 计算回报率 = 盈亏 / 保证金
-    let margin_used = contract.open_price * close_shares / contract.leverage
+    let _margin_used = contract.open_price * close_shares / contract.leverage
         + contract.fee.unwrap_or(0.0)
         + close_fee;
-    let return_rate = if margin_used.abs() > 1e-8 {
-        realized_pnl / margin_used
+    let _return_rate = if _margin_used.abs() > 1e-8 {
+        realized_pnl / _margin_used
     } else {
         0.0
     };
@@ -288,6 +288,7 @@ pub fn close_contract(
             contract.fee.unwrap_or(0.0),
             close_fee,
             realized_pnl,
+            _return_rate,
             closed_at,
             notes,
         ],
