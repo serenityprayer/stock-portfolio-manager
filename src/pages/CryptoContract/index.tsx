@@ -337,125 +337,6 @@ export default function CryptoContractPage() {
     },
   ];
 
-  // 成交历史列
-  const historyColumns = [
-    {
-      title: "类型",
-      dataIndex: "action_type",
-      key: "action_type",
-      width: 80,
-      render: (v: string) => (
-        <Tag color={v === "close" ? "orange" : "blue"}>
-          {v === "close" ? "平仓" : "加仓"}
-        </Tag>
-      ),
-    },
-    {
-      title: "标的",
-      dataIndex: "symbol",
-      key: "symbol",
-      render: (symbol: string, record: Record<string, unknown>) => (
-        <Space>
-          <Tag color={record.asset_type === "crypto" ? "blue" : "purple"}>
-            {record.asset_type === "crypto" ? "加密" : "TradFi"}
-          </Tag>
-          <Text strong>{symbol}</Text>
-          {record.name != null && <Text type="secondary">{(record.name as string)}</Text>}
-        </Space>
-      ),
-    },
-    {
-      title: "方向",
-      dataIndex: "position_type",
-      key: "position_type",
-      render: (v: string) => (
-        <Tag color={v === "long" ? "red" : "green"}>
-          {v === "long" ? "做多" : "做空"}
-        </Tag>
-      ),
-    },
-    {
-      title: "平仓价",
-      key: "close_price",
-      render: (_: unknown, record: Record<string, unknown>) =>
-        record.action_type === "close" && record.close_price != null
-          ? `$${(record.close_price as number).toFixed(2)}`
-          : "-",
-    },
-    {
-      title: "平仓数量",
-      key: "close_shares",
-      render: (_: unknown, record: Record<string, unknown>) =>
-        record.action_type === "close" && record.close_shares != null
-          ? (record.close_shares as number).toFixed(4)
-          : "-",
-    },
-    {
-      title: "加仓价",
-      key: "add_price",
-      render: (_: unknown, record: Record<string, unknown>) =>
-        record.action_type === "add" && record.add_price != null
-          ? `$${(record.add_price as number).toFixed(2)}`
-          : "-",
-    },
-    {
-      title: "加仓数量",
-      key: "add_shares",
-      render: (_: unknown, record: Record<string, unknown>) =>
-        record.action_type === "add" && record.add_shares != null
-          ? `+${(record.add_shares as number).toFixed(4)}`
-          : "-",
-    },
-    {
-      title: "新均价",
-      key: "new_avg_price",
-      render: (_: unknown, record: Record<string, unknown>) =>
-        record.new_avg_price != null
-          ? `$${(record.new_avg_price as number).toFixed(2)}`
-          : "-",
-    },
-    {
-      title: "新总仓位",
-      key: "new_total_shares",
-      render: (_: unknown, record: Record<string, unknown>) =>
-        record.new_total_shares != null
-          ? (record.new_total_shares as number).toFixed(4)
-          : "-",
-    },
-    {
-      title: "已实现盈亏",
-      key: "realized_pnl",
-      render: (_: unknown, record: Record<string, unknown>) => {
-        if (record.action_type !== "close" || record.realized_pnl == null) return "-";
-        const v = record.realized_pnl as number;
-        const color = v >= 0 ? "red" : "green";
-        return <Text style={{ color }}>{v >= 0 ? "+" : ""}{v.toFixed(2)}</Text>;
-      },
-    },
-    {
-      title: "回报率",
-      key: "return_rate",
-      render: (_: unknown, record: Record<string, unknown>) => {
-        if (record.action_type !== "close" || record.return_rate == null) return "-";
-        const v = record.return_rate as number;
-        const color = v >= 0 ? "red" : "green";
-        return <Text style={{ color }}>{v >= 0 ? "+" : ""}{(v * 100).toFixed(2)}%</Text>;
-      },
-    },
-    {
-      title: "杠杆",
-      dataIndex: "leverage",
-      key: "leverage",
-      render: (v: number) => `${v}x`,
-    },
-    {
-      title: "时间",
-      dataIndex: "closed_at",
-      key: "closed_at",
-      render: (v: string) => v?.slice(0, 19)?.replace("T", " "),
-    },
-  ];
-
   const totalMargin = contracts.reduce((sum, c) => sum + c.margin, 0);
   const totalPnl = contracts.reduce((sum, c) => {
     const q = quotes[c.symbol];
@@ -524,12 +405,123 @@ export default function CryptoContractPage() {
             key: "history",
             label: `成交历史 (${contractHistory.length})`,
             children: (
-              <Table
-                dataSource={contractHistory as any[]}
-                columns={historyColumns}
-                rowKey="id"
-                pagination={{ pageSize: 20 }}
-              />
+              <div className="flex flex-col gap-3">
+                {contractHistory.length === 0 ? (
+                  <div className="text-center text-gray-400 py-12 text-sm">暂无成交记录</div>
+                ) : (
+                  (contractHistory as unknown as import("../../types").ContractHistory[]).map((h) => {
+                    const isClose = h.action_type === "close";
+                    const borderColor = isClose ? "#E65100" : "#1565C0";
+                    const tagBg = isClose ? "#FFF3E0" : "#E3F2FD";
+                    const tagColor = isClose ? "#E65100" : "#1565C0";
+                    return (
+                      <div
+                        key={h.id}
+                        style={{
+                          background: "var(--color-background-primary)",
+                          borderRadius: "var(--border-radius-lg)",
+                          border: "0.5px solid var(--color-border-tertiary)",
+                          borderLeft: `3px solid ${borderColor}`,
+                          padding: "12px 14px",
+                        }}
+                      >
+                        {/* 卡片头部 */}
+                        <div className="flex justify-between items-center mb-2">
+                          <div className="flex items-center gap-2">
+                            <span
+                              style={{
+                                background: tagBg,
+                                color: tagColor,
+                                fontSize: 12,
+                                padding: "2px 8px",
+                                borderRadius: 4,
+                              }}
+                            >
+                              {isClose ? "平仓" : "加仓"}
+                            </span>
+                            <span className="font-medium text-sm">{h.symbol}{h.name ? ` · ${h.name}` : ""}</span>
+                            <span style={{ fontSize: 13, color: h.position_type === "long" ? "#E53935" : "#43A047" }}>
+                              {h.position_type === "long" ? "做多" : "做空"}
+                            </span>
+                            {h.asset_type === "crypto" ? (
+                              <Tag color="blue" style={{ fontSize: 11, margin: 0 }}>加密</Tag>
+                            ) : (
+                              <Tag color="purple" style={{ fontSize: 11, margin: 0 }}>TradFi</Tag>
+                            )}
+                          </div>
+                          <span className="text-xs text-gray-400">
+                            {h.closed_at?.slice(0, 19)?.replace("T", " ")}
+                          </span>
+                        </div>
+
+                        {/* 平仓详情 */}
+                        {isClose && (
+                          <div className="grid grid-cols-4 gap-x-4 gap-y-1 text-sm">
+                            <div>
+                              <div className="text-xs text-gray-400 mb-0.5">开仓价</div>
+                              <div>${h.open_price.toFixed(2)}</div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-gray-400 mb-0.5">平仓价</div>
+                              <div>${(h.close_price ?? 0).toFixed(2)}</div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-gray-400 mb-0.5">平仓数量</div>
+                              <div>{(h.close_shares ?? 0).toFixed(4)}</div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-gray-400 mb-0.5">杠杆</div>
+                              <div>{h.leverage}x</div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-gray-400 mb-0.5">已实现盈亏</div>
+                              <div style={{ color: (h.realized_pnl ?? 0) >= 0 ? "#E53935" : "#43A047", fontWeight: 500 }}>
+                                {(h.realized_pnl ?? 0) >= 0 ? "+" : ""}{(h.realized_pnl ?? 0).toFixed(2)}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-gray-400 mb-0.5">回报率</div>
+                              <div style={{ color: (h.return_rate ?? 0) >= 0 ? "#E53935" : "#43A047", fontWeight: 500 }}>
+                                {(h.return_rate ?? 0) >= 0 ? "+" : ""}{((h.return_rate ?? 0) * 100).toFixed(2)}%
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-gray-400 mb-0.5">手续费</div>
+                              <div className="text-gray-500 text-sm">${(h.open_fee + h.close_fee).toFixed(2)}</div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* 加仓详情 */}
+                        {!isClose && (
+                          <div className="grid grid-cols-4 gap-x-4 gap-y-1 text-sm">
+                            <div>
+                              <div className="text-xs text-gray-400 mb-0.5">加仓价</div>
+                              <div>${(h.add_price ?? 0).toFixed(2)}</div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-gray-400 mb-0.5">加仓数量</div>
+                              <div className="text-blue-600">+{(h.add_shares ?? 0).toFixed(4)}</div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-gray-400 mb-0.5">新均价</div>
+                              <div>${(h.new_avg_price ?? 0).toFixed(2)}</div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-gray-400 mb-0.5">新总仓位</div>
+                              <div>{(h.new_total_shares ?? 0).toFixed(4)}</div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-gray-400 mb-0.5">手续费</div>
+                              <div className="text-gray-500 text-sm">${(h.open_fee + h.close_fee).toFixed(2)}</div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
             ),
           },
         ]}
