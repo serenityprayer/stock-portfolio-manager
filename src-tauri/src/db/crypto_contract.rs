@@ -176,7 +176,7 @@ pub fn add_position(
     // 6. 写入成交历史（加仓）
     let history_id_add = Uuid::new_v4().to_string();
     conn.execute(
-        "INSERT INTO crypto_contract_close_history
+        "INSERT INTO crypto_contract_history
          (id, contract_id, symbol, name, asset_type, position_type,
           open_price, action_type,
           add_price, add_shares, new_avg_price, new_total_shares,
@@ -268,7 +268,7 @@ pub fn close_contract(
 
     // 2. 写入平仓历史
     tx.execute(
-        "INSERT INTO crypto_contract_close_history
+        "INSERT INTO crypto_contract_history
          (id, contract_id, symbol, name, asset_type, position_type,
           open_price, close_price, close_shares, leverage,
           open_fee, close_fee, realized_pnl, return_rate, closed_at, notes,
@@ -324,7 +324,7 @@ pub fn list_contract_history(conn: &Connection) -> Result<Vec<serde_json::Value>
                 add_price, add_shares, new_avg_price, new_total_shares,
                 leverage, open_fee, close_fee, realized_pnl, return_rate,
                 closed_at, notes
-         FROM crypto_contract_close_history
+         FROM crypto_contract_history
          ORDER BY closed_at DESC"
     )?;
     let rows = stmt.query_map([], |row| {

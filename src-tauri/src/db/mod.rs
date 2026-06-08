@@ -288,9 +288,14 @@ impl Database {
             ALTER TABLE crypto_contract ADD COLUMN asset_type TEXT NOT NULL DEFAULT 'crypto' CHECK(asset_type IN ('crypto', 'tradfi'));
         ");
 
-        // Crypto contract close history table
+        // Migrate: rename table from crypto_contract_close_history to crypto_contract_history
+        let _ = conn.execute_batch("
+            ALTER TABLE crypto_contract_close_history RENAME TO crypto_contract_history;
+        ");
+
+        // Crypto contract history table
         conn.execute_batch("
-            CREATE TABLE IF NOT EXISTS crypto_contract_close_history (
+            CREATE TABLE IF NOT EXISTS crypto_contract_history (
                 id              TEXT PRIMARY KEY NOT NULL,
                 contract_id     TEXT NOT NULL,
                 symbol          TEXT NOT NULL,
@@ -309,31 +314,31 @@ impl Database {
             );
         ")?;
 
-        // Migrate: add fields to crypto_contract_close_history for 成交历史
+        // Migrate: add fields to crypto_contract_history for 成交历史
         let _ = conn.execute_batch("
-            ALTER TABLE crypto_contract_close_history ADD COLUMN action_type TEXT NOT NULL DEFAULT 'close';
+            ALTER TABLE crypto_contract_history ADD COLUMN action_type TEXT NOT NULL DEFAULT 'close';
         ");
         let _ = conn.execute_batch("
-            ALTER TABLE crypto_contract_close_history ADD COLUMN add_price REAL;
+            ALTER TABLE crypto_contract_history ADD COLUMN add_price REAL;
         ");
         let _ = conn.execute_batch("
-            ALTER TABLE crypto_contract_close_history ADD COLUMN add_shares REAL;
+            ALTER TABLE crypto_contract_history ADD COLUMN add_shares REAL;
         ");
         let _ = conn.execute_batch("
-            ALTER TABLE crypto_contract_close_history ADD COLUMN new_avg_price REAL;
+            ALTER TABLE crypto_contract_history ADD COLUMN new_avg_price REAL;
         ");
         let _ = conn.execute_batch("
-            ALTER TABLE crypto_contract_close_history ADD COLUMN new_total_shares REAL;
+            ALTER TABLE crypto_contract_history ADD COLUMN new_total_shares REAL;
         ");
         let _ = conn.execute_batch("
-            ALTER TABLE crypto_contract_close_history ADD COLUMN return_rate REAL;
+            ALTER TABLE crypto_contract_history ADD COLUMN return_rate REAL;
         ");
 
         // 补算历史平仓记录的 return_rate（之前创建的记录该字段为 NULL）
         {
             let mut stmt = conn.prepare(
                 "SELECT id, open_price, close_shares, leverage, open_fee, close_fee, realized_pnl
-                 FROM crypto_contract_close_history
+                 FROM crypto_contract_history
                  WHERE action_type = 'close' AND return_rate IS NULL"
             )?;
             let rows = stmt.query_map([], |row| {
@@ -357,20 +362,20 @@ impl Database {
                     0.0
                 };
                 conn.execute(
-                    "UPDATE crypto_contract_close_history SET return_rate = ?1 WHERE id = ?2",
+                    "UPDATE crypto_contract_history SET return_rate = ?1 WHERE id = ?2",
                     params![return_rate, id],
                 )?;
             }
         }
 
-        // 重建 crypto_contract_close_history，去除 close_price/close_shares/realized_pnl 的 NOT NULL 约束
+        // 重建 crypto_contract_history，去除 close_price/close_shares/realized_pnl 的 NOT NULL 约束
         {
             // 1. 备份旧表
-            let _ = conn.execute_batch("ALTER TABLE crypto_contract_close_history RENAME TO _crypto_contract_close_history_bk;");
+            let _ = conn.execute_batch("ALTER TABLE crypto_contract_history RENAME TO _crypto_contract_history_bk;");
 
             // 2. 新建表（close_price/close_shares/realized_pnl 改为可空）
             conn.execute_batch("
-                CREATE TABLE crypto_contract_close_history (
+                CREATE TABLE crypto_contract_history (
                     id              TEXT PRIMARY KEY NOT NULL,
                     contract_id     TEXT NOT NULL,
                     symbol          TEXT NOT NULL,
@@ -397,35 +402,35 @@ impl Database {
 
             // 3. 迁移旧数据（兼容可能没有 return_rate 字段的老记录）
             let has_return_rate = conn.prepare(
-                "SELECT COUNT(*) FROM pragma_table_info('crypto_contract_close_history') WHERE name='return_rate'"
+                "SELECT COUNT(*) FROM pragma_table_info('crypto_contract_history') WHERE name='return_rate'"
             ).map(|mut s| {
                 s.query_row([], |r| r.get::<_, i32>(0)).unwrap_or(0) > 0
             }).unwrap_or(false);
 
             if has_return_rate {
                 conn.execute_batch("
-                    INSERT INTO crypto_contract_close_history
+                    INSERT INTO crypto_contract_history
                     SELECT id, contract_id, symbol, name, asset_type, position_type,
                            'close' as action_type, open_price, close_price, close_shares,
                            NULL, NULL, NULL, NULL,
                            leverage, open_fee, close_fee, realized_pnl,
                            return_rate, closed_at, notes
-                    FROM _crypto_contract_close_history_bk;
+                    FROM _crypto_contract_history_bk;
                 ")?;
             } else {
                 conn.execute_batch("
-                    INSERT INTO crypto_contract_close_history
+                    INSERT INTO crypto_contract_history
                     SELECT id, contract_id, symbol, name, asset_type, position_type,
                            'close' as action_type, open_price, close_price, close_shares,
                            NULL, NULL, NULL, NULL,
                            leverage, open_fee, close_fee, realized_pnl,
                            NULL, closed_at, notes
-                    FROM _crypto_contract_close_history_bk;
+                    FROM _crypto_contract_history_bk;
                 ")?;
             }
 
             // 4. 删掉备份表
-            let _ = conn.execute_batch("DROP TABLE _crypto_contract_close_history_bk;");
+            let _ = conn.execute_batch("DROP TABLE _crypto_contract_history_bk;");
         }
 
         // NOTE: xueqiu_cookie (xq_a_token) and xueqiu_u (user ID) are
