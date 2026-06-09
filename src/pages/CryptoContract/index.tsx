@@ -22,9 +22,9 @@ import {
   PlusOutlined,
   DeleteOutlined,
   EditOutlined,
-  CloseOutlined,
   MoreOutlined,
-  FundOutlined,
+  PlusCircleOutlined,
+  CheckCircleOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
 import { useCryptoContractStore } from "../../stores/cryptoContractStore";
@@ -379,7 +379,7 @@ export default function CryptoContractPage() {
             <Button
               type="text"
               size="small"
-              icon={<FundOutlined />}
+              icon={<PlusCircleOutlined />}
               onClick={(e) => { e.stopPropagation(); handleOpenAddModal(record); }}
               style={{ color: "#1565C0" }}
               title="加仓"
@@ -388,7 +388,7 @@ export default function CryptoContractPage() {
             <Button
               type="text"
               size="small"
-              icon={<CloseOutlined />}
+              icon={<CheckCircleOutlined />}
               onClick={(e) => { e.stopPropagation(); handleOpenCloseModal(record); }}
               style={{ color: "#E65100" }}
               title="平仓"
