@@ -16,8 +16,17 @@ import {
   Tabs,
   Descriptions,
   Statistic,
+  Dropdown,
 } from "antd";
-import { PlusOutlined, DeleteOutlined, EditOutlined, CloseOutlined } from "@ant-design/icons";
+import {
+  PlusOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  CloseOutlined,
+  MoreOutlined,
+  FundOutlined,
+} from "@ant-design/icons";
+import type { MenuProps } from "antd";
 import { useCryptoContractStore } from "../../stores/cryptoContractStore";
 import type { CryptoContract, ContractHistory } from "../../types";
 
@@ -55,6 +64,7 @@ export default function CryptoContractPage() {
   const [addPrice, setAddPrice] = useState<number>(0);
   const [addFee, setAddFee] = useState<number>(0);
   const [activeTab, setActiveTab] = useState<string>("active");
+  const [modal, contextHolder] = Modal.useModal();
 
   useEffect(() => {
     fetchContracts();
@@ -77,6 +87,24 @@ export default function CryptoContractPage() {
     const timer = setInterval(loadQuotes, 30000);
     return () => clearInterval(timer);
   }, [contracts]);
+
+  // 注入合约表行 hover 效果样式
+  useEffect(() => {
+    const style = document.createElement("style");
+    style.textContent = `
+      .crypto-contract-table .more-btn {
+        opacity: 0;
+        transition: opacity 0.2s;
+      }
+      .crypto-contract-table .ant-table-row:hover .more-btn {
+        opacity: 1;
+      }
+    `;
+    document.head.appendChild(style);
+    return () => {
+      try { document.head.removeChild(style); } catch { /* ignore */ }
+    };
+  }, []);
 
   const handleSubmit = async (values: {
     symbol: string;
@@ -304,36 +332,99 @@ export default function CryptoContractPage() {
         const pnl = record.position_type === "long"
           ? (q.price - record.open_price) * record.shares
           : (record.open_price - q.price) * record.shares;
-        const color = pnl >= 0 ? "red" : "green";
-        return <Text style={{ color }}>{pnl >= 0 ? "+" : ""}{pnl.toFixed(2)}</Text>;
+        const color = pnl >= 0 ? "#E53935" : "#43A047";
+        return <Text style={{ color, fontWeight: 500 }}>{pnl >= 0 ? "+" : ""}{pnl.toFixed(2)}</Text>;
+      },
+    },
+    {
+      title: "回报率",
+      key: "return_rate",
+      render: (_: unknown, record: CryptoContract) => {
+        const q = quotes[record.symbol];
+        if (!q) return "-";
+        const pnl = record.position_type === "long"
+          ? (q.price - record.open_price) * record.shares
+          : (record.open_price - q.price) * record.shares;
+        const marginUsed = record.open_price * record.shares / record.leverage + (record.fee || 0);
+        if (marginUsed < 1e-8) return "-";
+        const rr = pnl / marginUsed;
+        const color = rr >= 0 ? "#E53935" : "#43A047";
+        return <Text style={{ color, fontWeight: 500 }}>{rr >= 0 ? "+" : ""}{(rr * 100).toFixed(2)}%</Text>;
       },
     },
     {
       title: "操作",
       key: "action",
-      render: (_: unknown, record: CryptoContract) => (
-        <Space>
-          <Button type="link" size="small" onClick={() => handleOpenAddModal(record)}>
-            加仓
-          </Button>
-          <Button type="link" size="small" onClick={() => handleOpenCloseModal(record)}>
-            平仓
-          </Button>
-          <Button type="link" size="small" onClick={() => handleEdit(record)}>
-            编辑
-          </Button>
-          <Popconfirm
-            title="确认删除？"
-            onConfirm={() => handleDelete(record.id)}
-            okText="确认"
-            cancelText="取消"
-          >
-            <Button type="link" size="small" danger>
-              删除
-            </Button>
-          </Popconfirm>
-        </Space>
-      ),
+      width: 120,
+      render: (_: unknown, record: CryptoContract) => {
+        const menuItems: MenuProps["items"] = [
+          {
+            key: "edit",
+            icon: <EditOutlined />,
+            label: "编辑",
+            onClick: (e) => { e.domEvent.stopPropagation(); handleEdit(record); },
+          },
+          {
+            key: "delete",
+            icon: <DeleteOutlined />,
+            label: "删除",
+            danger: true,
+            onClick: (e) => { e.domEvent.stopPropagation(); /* handled by Popconfirm */ },
+          },
+        ];
+
+        return (
+          <Space size={4}>
+            {/* 加仓 */}
+            <Button
+              type="text"
+              size="small"
+              icon={<FundOutlined />}
+              onClick={(e) => { e.stopPropagation(); handleOpenAddModal(record); }}
+              style={{ color: "#1565C0" }}
+              title="加仓"
+            />
+            {/* 平仓 */}
+            <Button
+              type="text"
+              size="small"
+              icon={<CloseOutlined />}
+              onClick={(e) => { e.stopPropagation(); handleOpenCloseModal(record); }}
+              style={{ color: "#E65100" }}
+              title="平仓"
+            />
+            {/* 更多：编辑 + 删除 */}
+            <Dropdown
+              menu={{
+                items: menuItems,
+                onClick: (e) => {
+                  if (e.key === "delete") {
+                    // 删除需要 Popconfirm，用 Modal.confirm 代替
+                    modal.confirm({
+                      title: "确认删除？",
+                      content: `删除合约 ${record.symbol}，此操作不可撤回。`,
+                      okText: "确认",
+                      cancelText: "取消",
+                      okButtonProps: { danger: true },
+                      onOk: () => handleDelete(record.id),
+                    });
+                  }
+                },
+              }}
+              trigger={["click"]}
+            >
+              <Button
+                type="text"
+                size="small"
+                icon={<MoreOutlined />}
+                onClick={(e) => e.stopPropagation()}
+                className="more-btn"
+                style={{ color: "#999" }}
+              />
+            </Dropdown>
+          </Space>
+        );
+      },
     },
   ];
 
@@ -349,6 +440,7 @@ export default function CryptoContractPage() {
 
   return (
     <div>
+      {contextHolder}
       <Tabs
         activeKey={activeTab}
         onChange={setActiveTab}
@@ -392,6 +484,7 @@ export default function CryptoContractPage() {
                 </div>
 
                 <Table
+                  className="crypto-contract-table"
                   dataSource={contracts}
                   columns={columns}
                   rowKey="id"
