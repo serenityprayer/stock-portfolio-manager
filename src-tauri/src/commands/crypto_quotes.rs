@@ -1,9 +1,11 @@
+use crate::db::Database;
 use crate::models::StockQuote;
 use crate::services::http_client::general_client;
 use chrono::Utc;
 use reqwest::header;
 use std::collections::HashMap;
 use std::time::Duration;
+use tauri::State;
 
 // ── Crypto quotes (Gate.io → Binance fallback) ───────────────────────────
 
@@ -278,19 +280,29 @@ pub async fn fetch_crypto_quotes(
 // 复用 quote_service 中已有的 fetch_us_quote_with_provider / fetch_hk_quote_with_provider，
 // 与「持仓管理」使用完全相同的 provider 配置（默认 East Money，国内可访问）。
 
-/// 获取单个 TradFi 标的行情，复用 quote_service 已有逻辑。
-/// 使用与持仓管理相同的 provider（默认 eastmoney，国内可访问）。
-async fn fetch_tradfi_single(symbol: &str) -> Result<StockQuote, String> {
-    // 直接复用 quote_service 的逻辑，provider 用 eastmoney（国内可访问，无需 cookie）
-    crate::services::quote_service::fetch_us_quote_with_provider(symbol, "eastmoney").await
+/// 获取单个 TradFi 标的行情，从数据库读取 provider 配置。
+async fn fetch_tradfi_single(symbol: &str, provider: &str) -> Result<StockQuote, String> {
+    crate::services::quote_service::fetch_us_quote_with_provider(symbol, provider).await
 }
 
 /// 获取 TradFi 标的（股票/ETF）行情。
-/// 复用持仓管理的行情服务，与「持仓管理」使用相同的 provider 配置。
+/// 从数据库读取行情 provider 配置，与「持仓管理」使用相同的 provider。
 #[tauri::command]
 pub async fn fetch_tradfi_quotes(
+    db: tauri::State<'_, Database>,
     symbols: String,
 ) -> Result<HashMap<String, serde_json::Value>, String> {
+    // 从数据库读取 us_provider 配置
+    let us_provider = {
+        let conn = db.conn.lock().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT us_provider FROM quote_provider_config LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap_or_else(|_| "xueqiu".to_string())
+    };
+
     let symbols_vec: Vec<&str> = symbols.split(',').map(|s| s.trim()).collect();
     let mut results: HashMap<String, serde_json::Value> = HashMap::new();
     let mut errors: Vec<String> = Vec::new();
@@ -300,7 +312,7 @@ pub async fn fetch_tradfi_quotes(
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
-        match fetch_tradfi_single(symbol).await {
+        match fetch_tradfi_single(symbol, &us_provider).await {
             Ok(quote) => {
                 eprintln!(
                     "[tradfi_quotes] {} quote: price={}",
