@@ -568,11 +568,15 @@ export default function CryptoContractPage() {
                       title: "类型",
                       key: "action_type",
                       width: 72,
-                      render: (_: unknown, h: ContractHistory) => (
-                        <Tag color={h.action_type === "close" ? "orange" : "blue"} style={{ fontSize: 11, margin: 0 }}>
-                          {h.action_type === "close" ? "平仓" : "加仓"}
-                        </Tag>
-                      ),
+                      render: (_: unknown, h: ContractHistory) => {
+                        const map: Record<string, { color: string; label: string }> = {
+                          open:  { color: "green",  label: "开仓" },
+                          close: { color: "orange", label: "平仓" },
+                          add:   { color: "blue",  label: "加仓" },
+                        };
+                        const cfg = map[h.action_type] || { color: "default", label: h.action_type };
+                        return <Tag color={cfg.color} style={{ fontSize: 11, margin: 0 }}>{cfg.label}</Tag>;
+                      },
                     },
                     {
                       title: "方向",
@@ -583,6 +587,21 @@ export default function CryptoContractPage() {
                           {h.position_type === "long" ? "做多" : "做空"}
                         </span>
                       ),
+                    },
+                    {
+                      title: "价格",
+                      key: "price",
+                      width: 90,
+                      render: (_: unknown, h: ContractHistory) => {
+                        if (h.action_type === "close") {
+                          return <span>${(h.close_price ?? 0).toFixed(2)}</span>;
+                        }
+                        if (h.action_type === "add") {
+                          return <span className="text-blue-600">${(h.add_price ?? 0).toFixed(2)}</span>;
+                        }
+                        // open
+                        return <span>${h.open_price.toFixed(2)}</span>;
+                      },
                     },
                     {
                       title: "结果",
@@ -606,6 +625,8 @@ export default function CryptoContractPage() {
                             <span className="text-xs text-gray-400 ml-1">均{(h.new_avg_price ?? 0).toFixed(2)}</span>
                           </span>
                         );
+                        // open
+                        return <span className="text-gray-300">—</span>;
                       },
                     },
                     {

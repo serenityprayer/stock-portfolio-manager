@@ -82,6 +82,30 @@ pub fn create(
         params![id, symbol, name, asset_type, position_type, open_price, shares,
                 leverage, margin, fee, exchange, notes, created_at, updated_at],
     )?;
+
+    // 写入开仓记录到成交历史
+    let history_id = Uuid::new_v4().to_string();
+    conn.execute(
+        "INSERT INTO crypto_contract_history
+         (id, contract_id, symbol, name, asset_type, position_type,
+          action_type, open_price, leverage,
+          open_fee, close_fee, realized_pnl, return_rate, closed_at, notes)
+         VALUES (?1,?2,?3,?4,?5,?6,'open',?7,?8,?9,0,0,0,?10,?11)",
+        params![
+            history_id,
+            id,
+            symbol,
+            name,
+            asset_type,
+            position_type,
+            open_price,
+            leverage,
+            fee.unwrap_or(0.0),
+            created_at,
+            notes,
+        ],
+    )?;
+
     Ok(())
 }
 
