@@ -989,6 +989,7 @@ export default function HoldingsPage() {
                 dataIndex: "transaction_type",
                 key: "transaction_type",
                 width: 80,
+                // @ts-ignore – cashDelta injected at runtime
                 render: (type: TransactionType, record: Transaction & { cashDelta: number }) => {
                   if (isCashSymbol(record.symbol)) {
                     return <Tag color="blue">存入</Tag>;
@@ -1023,6 +1024,7 @@ export default function HoldingsPage() {
                 key: "cashDelta",
                 width: 140,
                 align: "right" as const,
+                // @ts-ignore – cashDelta injected at runtime
                 render: (_: unknown, record: Transaction & { cashDelta: number }) => {
                   const delta = record.cashDelta;
                   const sym = currencySymbol[record.currency] ?? "";
@@ -1040,6 +1042,7 @@ export default function HoldingsPage() {
                 key: "runningBalance",
                 width: 140,
                 align: "right" as const,
+                // @ts-ignore – runningBalance injected at runtime
                 render: (_: unknown, record: Transaction & { runningBalance: number }) => {
                   const sym = currencySymbol[record.currency] ?? "";
                   return (

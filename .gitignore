@@ -1,33 +1,18 @@
-# Dependencies
-node_modules/
+# Data & database
+data/
+src-tauri/portfolio.db
+src-tauri/gen/
 
-# Build output
-dist/
-build/
+# Local scripts
+start-app.ps1
+start-vite.bat
+start-with-proxy.bat
 
-# Tauri build output
+# Test files
+test_gateio.rs
+src-tauri/tests/
+
+# Build artifacts
 src-tauri/target/
-
-# Environment files
-.env
-.env.local
-.env.*.local
-
-# Editor directories and files
-.vscode/
-.idea/
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+node_modules/
+dist/

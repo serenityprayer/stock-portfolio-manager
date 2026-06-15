@@ -538,13 +538,27 @@ export default function CryptoContractPage() {
                           </div>
                         );
                       }
+                      if (h.action_type === "add") {
+                        return (
+                          <div className="grid grid-cols-4 gap-x-6 gap-y-1 text-sm" style={{ paddingLeft: 28 }}>
+                            <div><span className="text-xs text-gray-400">加仓价</span><div>${(h.add_price ?? 0).toFixed(2)}</div></div>
+                            <div><span className="text-xs text-gray-400">加仓数量</span><div className="text-blue-600">+{(h.add_shares ?? 0).toFixed(4)}</div></div>
+                            <div><span className="text-xs text-gray-400">新均价</span><div>${(h.new_avg_price ?? 0).toFixed(2)}</div></div>
+                            <div><span className="text-xs text-gray-400">新总仓位</span><div>{(h.new_total_shares ?? 0).toFixed(4)}</div></div>
+                            <div><span className="text-xs text-gray-400">手续费</span><div>${(h.open_fee + h.close_fee).toFixed(2)}</div></div>
+                          </div>
+                        );
+                      }
+                      // open：展示开仓详情
+                      const openMargin = h.open_price * (h.close_shares ?? 0) / h.leverage;
                       return (
                         <div className="grid grid-cols-4 gap-x-6 gap-y-1 text-sm" style={{ paddingLeft: 28 }}>
-                          <div><span className="text-xs text-gray-400">加仓价</span><div>${(h.add_price ?? 0).toFixed(2)}</div></div>
-                          <div><span className="text-xs text-gray-400">加仓数量</span><div className="text-blue-600">+{(h.add_shares ?? 0).toFixed(4)}</div></div>
-                          <div><span className="text-xs text-gray-400">新均价</span><div>${(h.new_avg_price ?? 0).toFixed(2)}</div></div>
-                          <div><span className="text-xs text-gray-400">新总仓位</span><div>{(h.new_total_shares ?? 0).toFixed(4)}</div></div>
-                          <div><span className="text-xs text-gray-400">手续费</span><div>${(h.open_fee + h.close_fee).toFixed(2)}</div></div>
+                          <div><span className="text-xs text-gray-400">开仓价</span><div className="font-medium">${h.open_price.toFixed(2)}</div></div>
+                          <div><span className="text-xs text-gray-400">开仓数量</span><div className="text-green-600 font-medium">{(h.close_shares ?? 0).toFixed(4)}</div></div>
+                          <div><span className="text-xs text-gray-400">杠杆</span><div>{h.leverage}x</div></div>
+                          <div><span className="text-xs text-gray-400">保证金</span><div>${openMargin.toFixed(2)}</div></div>
+                          <div><span className="text-xs text-gray-400">手续费</span><div>${h.open_fee.toFixed(2)}</div></div>
+                          {h.notes && <div><span className="text-xs text-gray-400">备注</span><div className="text-gray-500">{h.notes}</div></div>}
                         </div>
                       );
                     },
@@ -643,8 +657,14 @@ export default function CryptoContractPage() {
                             </span>
                           );
                         }
-                        // open
-                        return <span className="text-gray-400">—</span>;
+                        // open：展示开仓保证金
+                        const openMargin = h.open_price * (h.close_shares ?? 0) / h.leverage;
+                        return (
+                          <span>
+                            <span style={{ fontWeight: 500 }}>${openMargin.toFixed(2)}</span>
+                            <span className="text-xs text-gray-400 ml-1">保证金{h.leverage > 1 ? ` · ${h.leverage}x` : ""}</span>
+                          </span>
+                        );
                       },
                     },
                     {

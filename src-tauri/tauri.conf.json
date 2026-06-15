@@ -5,7 +5,7 @@
   "identifier": "com.portfolio.manager",
   "build": {
     "frontendDist": "../dist",
-    "devUrl": "http://localhost:1422",
+    "devUrl": "http://localhost:1420",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
   },

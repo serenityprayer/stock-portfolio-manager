@@ -421,7 +421,7 @@ pub async fn backfill_snapshots(
         let cash_sym = format!("{}{}", crate::services::quote_service::CASH_SYMBOL_PREFIX, tx.currency);
         let cash_key = (tx.account_id.clone(), cash_sym);
         match tx.transaction_type.as_str() {
-            "BUY" => {
+            "BUY" | "OPEN" => {
                 *total_unwind.entry(key).or_insert(0.0) -= tx.shares;
                 *total_unwind.entry(cash_key).or_insert(0.0) +=
                     tx.total_amount + tx.commission;
@@ -454,6 +454,29 @@ pub async fn backfill_snapshots(
             .map_err(|e| e.to_string())?
     };
 
+    // Clamp start_date to the first transaction date so that we never
+    // generate snapshots for dates before the portfolio was created.
+    // This prevents backfill from re-creating garbage data that was
+    // previously cleaned up by the migration.
+    let first_tx_date: Option<NaiveDate> = {
+        let conn = db.conn.lock().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT MIN(DATE(traded_at)) FROM transactions",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
+        .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
+    };
+    let effective_start = match first_tx_date {
+        Some(ftd) if start_date < ftd => ftd,
+        _ => start_date,
+    };
+    if effective_start > end_date {
+        return Ok(0);
+    }
+
     let mut missing_dates: Vec<NaiveDate> = Vec::new();
     // When `force` is true, re-create ALL snapshots if any transactions
     // exist in the period (a transaction on date D changes the adjusted
@@ -461,7 +484,7 @@ pub async fn backfill_snapshots(
     // fill in dates that have never been calculated – this lets the UI
     // load quickly from cached data without re-fetching historical prices.
     let has_transactions = force && transactions.iter().any(|tx| tx.trade_date <= end_date);
-    let mut d = start_date;
+    let mut d = effective_start;
     while d <= end_date {
         let wd = d.weekday();
         if wd != chrono::Weekday::Sat && wd != chrono::Weekday::Sun {
@@ -619,7 +642,7 @@ pub async fn backfill_snapshots(
             );
             let cash_key = (tx.account_id.clone(), cash_sym);
             match tx.transaction_type.as_str() {
-                "BUY" => {
+                "BUY" | "OPEN" => {
                     *running_unwind.entry(key).or_insert(0.0) -= tx.shares;
                     *running_unwind.entry(cash_key).or_insert(0.0) +=
                         tx.total_amount + tx.commission;

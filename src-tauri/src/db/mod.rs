@@ -82,22 +82,62 @@ impl Database {
             );
         ")?;
 
-        // Seed system categories (ignore if already exist)
+        // Seed system categories (fixed UUIDs — INSERT OR IGNORE prevents re-insertion even after rename)
         let categories = [
-            (uuid::Uuid::new_v4().to_string(), "现金类", "#22C55E", "💵", 1, 1),
-            (uuid::Uuid::new_v4().to_string(), "分红股", "#3B82F6", "💰", 1, 2),
-            (uuid::Uuid::new_v4().to_string(), "成长股", "#F97316", "🚀", 1, 3),
-            (uuid::Uuid::new_v4().to_string(), "套利",   "#8B5CF6", "🔄", 1, 4),
+            ("a0000001-0000-0000-0000-000000000001", "现金类", "#22C55E", "💵", 1, 1),
+            ("a0000001-0000-0000-0000-000000000002", "分红股", "#3B82F6", "💰", 1, 2),
+            ("a0000001-0000-0000-0000-000000000003", "成长股", "#F97316", "🚀", 1, 3),
+            ("a0000001-0000-0000-0000-000000000004", "套利",   "#8B5CF6", "🔄", 1, 4),
         ];
 
         let now = chrono::Utc::now().to_rfc3339();
         for (id, name, color, icon, is_system, sort_order) in &categories {
             conn.execute(
                 "INSERT OR IGNORE INTO categories (id, name, color, icon, is_system, sort_order, created_at)
-                 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
-                 WHERE NOT EXISTS (SELECT 1 FROM categories WHERE name = ?2 AND is_system = 1)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 rusqlite::params![id, name, color, icon, is_system, sort_order, now],
             )?;
+        }
+
+        // 清理重复系统类别（旧版随机UUID + 改名后重入导致的重复）
+        // 策略：将旧随机ID的系统类别合并到固定UUID上，删掉多余条目
+        let system_fixups = [
+            ("a0000001-0000-0000-0000-000000000001", 1), // 现金类
+            ("a0000001-0000-0000-0000-000000000002", 2), // 分红股
+            ("a0000001-0000-0000-0000-000000000003", 3), // 成长股
+            ("a0000001-0000-0000-0000-000000000004", 4), // 套利
+        ];
+        for (fixed_id, sort_order) in &system_fixups {
+            let existing: Option<String> = conn.query_row(
+                "SELECT id FROM categories WHERE id = ?1",
+                rusqlite::params![fixed_id],
+                |row| row.get(0),
+            ).ok();
+            if existing.is_none() {
+                // 固定ID不存在，找一个同sort_order的非固定ID系统类别来"收编"
+                if let Ok(old_id) = conn.query_row(
+                    "SELECT id FROM categories WHERE sort_order = ?1 AND is_system = 1 AND id != ?2 LIMIT 1",
+                    rusqlite::params![sort_order, fixed_id],
+                    |row| row.get::<_, String>(0),
+                ) {
+                    conn.execute("UPDATE holdings SET category_id = ?1 WHERE category_id = ?2",
+                        rusqlite::params![fixed_id, &old_id])?;
+                    conn.execute("UPDATE categories SET id = ?1 WHERE id = ?2",
+                        rusqlite::params![fixed_id, &old_id])?;
+                }
+            } else {
+                // 固定ID已存在，删掉同sort_order的其他系统类别（迁移其持仓）
+                let extras: Vec<String> = conn.prepare(
+                    "SELECT id FROM categories WHERE sort_order = ?1 AND is_system = 1 AND id != ?2"
+                )?.query_map(rusqlite::params![sort_order, fixed_id], |row| row.get(0))?
+                 .collect::<Result<Vec<_>, _>>()?;
+                for extra_id in &extras {
+                    conn.execute("UPDATE holdings SET category_id = ?1 WHERE category_id = ?2",
+                        rusqlite::params![fixed_id, extra_id])?;
+                    conn.execute("DELETE FROM categories WHERE id = ?1",
+                        rusqlite::params![extra_id])?;
+                }
+            }
         }
 
         conn.execute_batch("
@@ -374,11 +414,49 @@ impl Database {
             }
         }
 
+        // 补填 open 类型历史记录的 close_shares（开仓数量）
+        // 旧记录创建时未写入，从合约表回填
+        conn.execute_batch("
+            UPDATE crypto_contract_history
+            SET close_shares = (
+                SELECT shares FROM crypto_contract
+                WHERE crypto_contract.id = crypto_contract_history.contract_id
+            )
+            WHERE action_type = 'open' AND close_shares IS NULL;
+        ")?;
+
         // 清理残留备份表（如有）
         let _ = conn.execute_batch("
             DROP TABLE IF EXISTS _crypto_contract_history_bk;
             DROP TABLE IF EXISTS _crypto_contract_close_history_bk;
         ");
+
+        // 清理错误的 historical 快照数据
+        // backfill_snapshots 旧版 bug：unwind 不处理 OPEN 交易类型，
+        // 导致开仓前的日期也被写入了快照（用当前持仓股数 × 历史价格）
+        // 修复：删除每个 symbol 在其首笔交易日期之前的所有快照
+        conn.execute_batch("
+            DELETE FROM daily_holding_snapshots
+            WHERE ROWID IN (
+                SELECT s.ROWID
+                FROM daily_holding_snapshots s
+                INNER JOIN (
+                    SELECT account_id, symbol, MIN(DATE(traded_at)) as first_trade_date
+                    FROM transactions
+                    GROUP BY account_id, symbol
+                ) first_tx ON s.account_id = first_tx.account_id
+                    AND s.symbol = first_tx.symbol
+                WHERE s.date < first_tx.first_trade_date
+            );
+        ")?;
+
+        // 清理 daily_portfolio_values 中的错误历史数据
+        // 同上：backfill 旧版 bug 导致建仓前的日期也写入了组合市值
+        conn.execute(
+            "DELETE FROM daily_portfolio_values
+             WHERE date < (SELECT MIN(DATE(traded_at)) FROM transactions)",
+            [],
+        )?;
 
         // 升级 crypto_contract_history 表结构（仅首次执行）
         // 条件：表存在 且 close_price 列为 NOT NULL（需要改为可空）

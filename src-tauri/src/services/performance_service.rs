@@ -47,13 +47,14 @@ impl PerformanceFilter {
     }
 }
 
-/// Fetch daily portfolio values (total_value, daily_pnl) for the date range.
+/// Fetch daily portfolio values (total_value, total_cost, daily_pnl,
+/// cumulative_pnl) for the date range.
 fn fetch_daily_values(
     db: &Database,
     start: NaiveDate,
     end: NaiveDate,
     filter: &PerformanceFilter,
-) -> Result<Vec<(NaiveDate, f64, f64)>, String> {
+) -> Result<Vec<(NaiveDate, f64, f64, f64, f64)>, String> {
     if filter.is_active() {
         return fetch_filtered_daily_values(db, start, end, filter);
     }
@@ -63,7 +64,7 @@ fn fetch_daily_values(
 
     let mut stmt = conn
         .prepare(
-            "SELECT date, total_value, daily_pnl
+            "SELECT date, total_value, total_cost, daily_pnl, cumulative_pnl
              FROM daily_portfolio_values
              WHERE date BETWEEN ?1 AND ?2
              ORDER BY date ASC",
@@ -74,31 +75,34 @@ fn fetch_daily_values(
         .query_map(rusqlite::params![start_str, end_str], |row| {
             let date_str: String = row.get(0)?;
             let value: f64 = row.get(1)?;
-            let dpnl: f64 = row.get(2)?;
-            Ok((date_str, value, dpnl))
+            let cost: f64 = row.get(2)?;
+            let dpnl: f64 = row.get(3)?;
+            let cpnl: f64 = row.get(4)?;
+            Ok((date_str, value, cost, dpnl, cpnl))
         })
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
 
     rows.into_iter()
-        .map(|(ds, v, d)| {
+        .map(|(ds, v, c, d, cp)| {
             let date = NaiveDate::parse_from_str(&ds, "%Y-%m-%d")
                 .map_err(|e| format!("bad date '{}': {}", ds, e))?;
-            Ok((date, v, d))
+            Ok((date, v, c, d, cp))
         })
         .collect()
 }
 
 /// Fetch daily values from `daily_holding_snapshots` aggregated by date,
 /// filtered by market and/or account_id. Derives daily_pnl from consecutive
-/// day value differences.
+/// day value differences.  Cost and cumulative_pnl are approximated from
+/// the aggregated values (snapshots only store market_value).
 fn fetch_filtered_daily_values(
     db: &Database,
     start: NaiveDate,
     end: NaiveDate,
     filter: &PerformanceFilter,
-) -> Result<Vec<(NaiveDate, f64, f64)>, String> {
+) -> Result<Vec<(NaiveDate, f64, f64, f64, f64)>, String> {
     let conn = db.conn.lock().map_err(|e| e.to_string())?;
     let start_str = start.format("%Y-%m-%d").to_string();
     let end_str = end.format("%Y-%m-%d").to_string();
@@ -131,11 +135,16 @@ fn fetch_filtered_daily_values(
 
     let mut result = Vec::with_capacity(rows.len());
     let mut prev_value: Option<f64> = None;
+    let mut cum_pnl = 0.0_f64;
     for (ds, v) in rows {
         let date = NaiveDate::parse_from_str(&ds, "%Y-%m-%d")
             .map_err(|e| format!("bad date '{}': {}", ds, e))?;
         let dpnl = prev_value.map(|pv| v - pv).unwrap_or(0.0);
-        result.push((date, v, dpnl));
+        cum_pnl += dpnl;
+        // Snapshots don't store cost basis; use value as cost approximation
+        // so that return = (value - cost) / cost ≈ 0 for filtered view.
+        // TODO: join with transactions table for proper cost in filtered mode.
+        result.push((date, v, v, dpnl, cum_pnl));
         prev_value = Some(v);
     }
     Ok(result)
@@ -177,34 +186,46 @@ fn fetch_previous_day_value(db: &Database, date: NaiveDate, filter: &Performance
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Build a Vec<ReturnDataPoint> from the daily portfolio values.
+/// Each row is (date, total_value, total_cost, daily_pnl, cumulative_pnl).
+///
 /// When `inception_value` is provided, cumulative returns are calculated
 /// relative to this value (the portfolio value at creation) instead of the
 /// first element in `daily_values`.
+///
+/// **Return calculation:** cumulative_return uses `cumulative_pnl / total_cost`
+/// so that returns reflect actual profit/loss relative to invested capital,
+/// NOT market-value changes that conflate investment inflows with gains.
 ///
 /// **Note:** The returned `daily_return` and `cumulative_return` fields are
 /// already in **percentage** form (e.g. 1.5 means 1.5%). Callers that need
 /// decimal returns (e.g. for volatility or Sharpe calculations) must divide
 /// by 100.
 pub fn build_return_series(
-    daily_values: &[(NaiveDate, f64, f64)],
+    daily_values: &[(NaiveDate, f64, f64, f64, f64)],
     inception_value: Option<f64>,
 ) -> Vec<ReturnDataPoint> {
     if daily_values.is_empty() {
         return vec![];
     }
 
-    let start_value = inception_value.unwrap_or(daily_values[0].1);
+    // Legacy inception_value is kept for backward-compat but no longer drives
+    // the cumulative-return formula (cost-based PnL is used instead).
+    let _start_value = inception_value.unwrap_or(daily_values[0].1);
     let mut prev_value = daily_values[0].1;
     let mut result = Vec::with_capacity(daily_values.len());
 
-    for (date, value, dpnl) in daily_values {
+    for (date, value, cost, dpnl, cpnl) in daily_values {
+        // Daily return: price movement / previous day's value
         let daily_return = if prev_value > 0.0 {
             (value - prev_value) / prev_value
         } else {
             0.0
         };
-        let cumulative_return = if start_value > 0.0 {
-            (value - start_value) / start_value
+        // Cumulative return: actual PnL relative to cost basis.
+        // This correctly handles additional capital inflows (new positions,
+        // deposits) because cpnl tracks real profit/loss, not value change.
+        let cumulative_return = if *cost > 0.0 {
+            *cpnl / *cost
         } else {
             0.0
         };
@@ -366,7 +387,9 @@ pub fn get_performance_summary(
     let start_value = base_value.unwrap_or(daily[0].1);
     let end_value = daily.last().unwrap().1;
 
-    let total_pnl = end_value - start_value;
+    // Use actual cumulative PnL from the data, NOT (end_value - start_value)
+    // which conflates investment inflows with trading gains.
+    let total_pnl = daily.last().map(|(_, _, _, _, cpnl)| *cpnl).unwrap_or(0.0);
 
     // Build the return series FIRST, then derive total_return from its last
     // cumulative_return.  This guarantees the summary card value matches the
@@ -468,9 +491,11 @@ pub fn get_return_attribution(
     let end_str = end_date.format("%Y-%m-%d").to_string();
 
     // Get start and end snapshots aggregated by symbol
+    // start_vals: symbol -> (market, category_name, market_value)
     let mut start_vals: std::collections::HashMap<String, (String, String, f64)> =
         std::collections::HashMap::new();
-    let mut end_vals: std::collections::HashMap<String, f64> =
+    // end_vals: symbol -> (market, category_name, market_value)
+    let mut end_vals: std::collections::HashMap<String, (String, String, f64)> =
         std::collections::HashMap::new();
 
     {
@@ -508,8 +533,9 @@ pub fn get_return_attribution(
 
     {
         // Build end query with filters applied to both subquery and outer query
+        // Also fetch market and category_name for proper attribution of newly opened positions
         let mut sql = String::from(
-            "SELECT symbol, SUM(market_value)
+            "SELECT symbol, market, COALESCE(category_name, '未分类'), SUM(market_value)
              FROM daily_holding_snapshots
              WHERE date = (
                  SELECT MAX(date) FROM daily_holding_snapshots WHERE date <= ?1",
@@ -523,13 +549,13 @@ pub fn get_return_attribution(
         let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map(param_refs.as_slice(), |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, f64>(3)?))
             })
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
-        for (sym, val) in rows {
-            *end_vals.entry(sym).or_insert(0.0) += val;
+        for (sym, mkt, cat, val) in rows {
+            end_vals.entry(sym).or_insert((mkt, cat, 0.0)).2 += val;
         }
     }
 
@@ -585,6 +611,7 @@ pub fn get_return_attribution(
         for (sym, tx_type, amount) in rows {
             let flow = match tx_type.as_str() {
                 "BUY" => amount,   // money invested
+                "OPEN" => amount,  // opening a position (same as BUY for cash flow)
                 "SELL" => -amount, // money withdrawn
                 _ => 0.0,
             };
@@ -603,6 +630,24 @@ pub fn get_return_attribution(
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
         rows.into_iter().collect()
+    };
+
+    // Fetch holding cost (avg_cost * shares) for symbols that have no
+    // snapshot on the start date (opened before the analysis period).
+    let holding_cost_map: std::collections::HashMap<String, f64> = {
+        let mut map = std::collections::HashMap::new();
+        let mut stmt = conn
+            .prepare("SELECT symbol, avg_cost * shares FROM holdings")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?)))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        for (sym, cost) in rows {
+            map.insert(sym, cost);
+        }
+        map
     };
 
     let all_symbols: std::collections::HashSet<String> = start_vals
@@ -630,28 +675,49 @@ pub fn get_return_attribution(
             continue;
         }
 
+        // Get market and category: prefer start_vals (actual at start_date),
+        // fall back to end_vals (for newly opened positions after start_date).
         let (market, cat, sv) = start_vals
             .get(sym)
             .map(|(m, c, v)| (m.clone(), c.clone(), *v))
-            .unwrap_or_else(|| ("Unknown".to_string(), "未分类".to_string(), 0.0));
-        let ev = end_vals.get(sym).copied().unwrap_or(0.0);
-        // Actual PnL = (end_value - start_value) - net_cash_flow
-        // net_cash_flow: positive for buys (money in), negative for sells (money out)
+            .unwrap_or_else(|| {
+                end_vals
+                    .get(sym)
+                    .map(|(m, c, _)| (m.clone(), c.clone(), 0.0))
+                    .unwrap_or_else(|| ("Unknown".to_string(), "未分类".to_string(), 0.0))
+            });
+        let ev = end_vals.get(sym).map(|(_, _, v)| *v).unwrap_or(0.0);
         let cf = net_cash_flows.get(sym).copied().unwrap_or(0.0);
-        let pnl = ev - sv - cf;
+
+        // Compute PnL correctly for three cases:
+        // 1. sv > 0:  Had position at start.  PnL = ev - sv - cf.
+        // 2. sv = 0, cf > 0:  Bought during period.  Cost = cf, PnL = ev - cf.
+        // 3. sv = 0, cf <= 0:  Position existed before period (no start snapshot
+        //    because start_date is before first snapshot).  Use holdings.avg_cost
+        //    as cost basis.  PnL = ev - cost_basis.
+        let (actual_sv, pnl) = if sv > 0.0 {
+            (sv, ev - sv - cf)
+        } else if cf > 0.0 {
+            // New position opened during the period
+            (cf, ev - cf)
+        } else {
+            // Position existed before period but no start snapshot
+            let cost = holding_cost_map.get(sym).copied().unwrap_or(ev);
+            (cost, ev - cost)
+        };
 
         total_pnl += pnl;
-        total_start_val += sv;
+        total_start_val += actual_sv;
         *market_pnl.entry(market.clone()).or_insert(0.0) += pnl;
         *category_pnl.entry(cat.clone()).or_insert(0.0) += pnl;
         holding_pnl
             .entry(sym.clone())
             .and_modify(|e| {
                 e.2 += pnl;
-                e.3 += sv;
+                e.3 += actual_sv;
                 e.4 += ev;
             })
-            .or_insert((market, cat, pnl, sv, ev));
+            .or_insert((market, cat, pnl, actual_sv, ev));
     }
 
     let make_items =
@@ -742,53 +808,62 @@ pub fn get_monthly_returns(
         return Ok(vec![]);
     }
 
-    // Group by year-month
-    let mut months: std::collections::BTreeMap<(i32, u32), (NaiveDate, f64, NaiveDate, f64)> =
-        std::collections::BTreeMap::new();
+    // Group by year-month, storing (first_date, first_value, first_cost,
+    // last_date, last_value, last_cost, last_cum_pnl)
+    let mut months: std::collections::BTreeMap<
+        (i32, u32),
+        (NaiveDate, f64, f64, NaiveDate, f64, f64, f64),
+    > = std::collections::BTreeMap::new();
 
-    for (date, value, _dpnl) in &daily {
+    for (date, value, cost, _, cum_pnl) in &daily {
         let key = (date.year(), date.month());
         months
             .entry(key)
             .and_modify(|e| {
-                if *date > e.2 {
-                    e.2 = *date;
-                    e.3 = *value;
+                if *date > e.3 {
+                    e.3 = *date;
+                    e.4 = *value;
+                    e.5 = *cost;
+                    e.6 = *cum_pnl;
                 }
             })
-            .or_insert((*date, *value, *date, *value));
+            .or_insert((*date, *value, *cost, *date, *value, *cost, *cum_pnl));
     }
 
-    // Build a sorted list of month-start values
+    // Build a sorted list of month keys
     let keys: Vec<(i32, u32)> = months.keys().cloned().collect();
     let mut result = Vec::new();
 
     for (i, &key) in keys.iter().enumerate() {
-        let (_, _, end_d, end_v) = months[&key];
-        // start value is either the last day of the prior month or the first day of this month
-        let start_v = if i == 0 {
-            // Use the first data point of this month as start
-            let (_, first_v, _, _) = months[&key];
-            first_v
+        let (_, first_v, first_cost, _, end_v, end_cost, end_cum_pnl) = months[&key];
+
+        // Monthly return based on PnL delta relative to cost basis,
+        // NOT raw value delta (which conflates capital inflows with gains).
+        //
+        // Return = (cum_pnl_end - cum_pnl_start) / cost_start
+        // For the first month, cum_pnl_start = 0.
+        let (start_cost, start_cum_pnl) = if i == 0 {
+            // Use first day's cost and cum_pnl as baseline
+            (first_cost, 0.0_f64) // cum_pnl relative to month start = 0
         } else {
             let prev_key = keys[i - 1];
-            let (_, _, _, prev_end_v) = months[&prev_key];
-            prev_end_v
+            let (_, _, _, _, _, prev_cost, prev_cum_pnl) = months[&prev_key];
+            (prev_cost, prev_cum_pnl)
         };
 
-        let pnl = end_v - start_v;
-        let return_rate = if start_v > 0.0 {
-            (end_v - start_v) / start_v * 100.0
+        let pnl_delta = end_cum_pnl - start_cum_pnl;
+        let return_rate = if start_cost > 0.0 {
+            pnl_delta / start_cost * 100.0
         } else {
             0.0
         };
 
         result.push(MonthlyReturn {
-            year: end_d.year(),
-            month: end_d.month(),
+            year: months[&key].3.year(),
+            month: months[&key].3.month(),
             return_rate,
-            pnl,
-            start_value: start_v,
+            pnl: pnl_delta,
+            start_value: first_v,
             end_value: end_v,
         });
     }
@@ -897,6 +972,7 @@ pub fn get_holding_performance_ranking(
         for (sym, tx_type, amount) in rows {
             let flow = match tx_type.as_str() {
                 "BUY" => amount,
+                "OPEN" => amount,
                 "SELL" => -amount,
                 _ => 0.0,
             };
@@ -910,6 +986,23 @@ pub fn get_holding_performance_ranking(
         start_map.insert(s.symbol, (s.market, s.category_name, s.market_value));
     }
 
+    // Fetch avg_cost * shares from holdings for cost basis when sv = 0
+    let holding_cost_map: std::collections::HashMap<String, f64> = {
+        let mut map = std::collections::HashMap::new();
+        let mut stmt = conn
+            .prepare("SELECT symbol, avg_cost * shares FROM holdings")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?)))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        for (sym, cost) in rows {
+            map.insert(sym, cost);
+        }
+        map
+    };
+
     let mut performances: Vec<HoldingPerformance> = end_snaps
         .into_iter()
         .filter(|e| !crate::services::quote_service::is_cash_symbol(&e.symbol))
@@ -920,17 +1013,33 @@ pub fn get_holding_performance_ranking(
                 .unwrap_or_else(|| (e.market.clone(), e.category_name.clone(), 0.0));
             let ev = e.market_value;
             let cf = net_cash_flows.get(&e.symbol).copied().unwrap_or(0.0);
-            let pnl = ev - sv - cf;
-            let cost_base = sv + cf.max(0.0); // start_value + any additional investment
-            let return_rate = if cost_base > 0.0 { pnl / cost_base * 100.0 } else { 0.0 };
+
+            let (actual_sv, cost_base, pnl) = if sv > 0.0 {
+                // Had position at start: PnL = end - start - net_cash_flow
+                let p = ev - sv - cf;
+                (sv, sv + cf.max(0.0), p)
+            } else if cf > 0.0 {
+                // New position opened during period: cost = cash invested
+                (cf, cf, ev - cf)
+            } else {
+                // Position existed before period, no start snapshot
+                let cost = holding_cost_map.get(&e.symbol).copied().unwrap_or(ev);
+                (cost, cost, ev - cost)
+            };
+
+            let return_rate = if cost_base > 0.0 {
+                pnl / cost_base * 100.0
+            } else {
+                0.0
+            };
             HoldingPerformance {
                 symbol: e.symbol,
-                name: String::new(), // will be filled below
+                name: String::new(),
                 market,
                 category_name: cat,
                 return_rate,
                 pnl,
-                start_value: sv,
+                start_value: actual_sv,
                 end_value: ev,
             }
         })
@@ -1202,35 +1311,36 @@ mod tests {
 
     #[test]
     fn test_build_return_series() {
+        // (date, value, cost, daily_pnl, cumulative_pnl)
         let daily = vec![
-            (parse_date("2024-01-01").unwrap(), 100.0, 0.0),
-            (parse_date("2024-01-02").unwrap(), 105.0, 5.0),
-            (parse_date("2024-01-03").unwrap(), 103.0, -2.0),
+            (parse_date("2024-01-01").unwrap(), 100.0, 100.0, 0.0, 0.0),
+            (parse_date("2024-01-02").unwrap(), 105.0, 100.0, 5.0, 5.0),
+            (parse_date("2024-01-03").unwrap(), 103.0, 100.0, -2.0, 3.0),
         ];
         let series = build_return_series(&daily, None);
         assert_eq!(series.len(), 3);
+        // Day2: cpnl/cost = 5/100 * 100 = 5%
         assert!((series[1].cumulative_return - 5.0).abs() < 1e-6);
+        // Day3: cpnl/cost = 3/100 * 100 = 3%
         assert!((series[2].cumulative_return - 3.0).abs() < 1e-6);
     }
 
     #[test]
     fn test_build_return_series_with_inception_value() {
-        // Simulate: previous day's value was 50
-        // but the selected range starts when portfolio value is 100
+        // inception_value is now only a legacy parameter; cumulative return
+        // is driven by cost-based PnL, not by value delta from base.
         let daily = vec![
-            (parse_date("2024-03-01").unwrap(), 100.0, 0.0),
-            (parse_date("2024-03-02").unwrap(), 105.0, 5.0),
-            (parse_date("2024-03-03").unwrap(), 103.0, -2.0),
+            (parse_date("2024-03-01").unwrap(), 100.0, 100.0, 0.0, 0.0),
+            (parse_date("2024-03-02").unwrap(), 105.0, 100.0, 5.0, 5.0),
+            (parse_date("2024-03-03").unwrap(), 103.0, 100.0, -2.0, 3.0),
         ];
         let series = build_return_series(&daily, Some(50.0));
         assert_eq!(series.len(), 3);
-        // cumulative_return from base: (100 - 50) / 50 * 100 = 100%
-        assert!((series[0].cumulative_return - 100.0).abs() < 1e-6);
-        // cumulative_return from base: (105 - 50) / 50 * 100 = 110%
-        assert!((series[1].cumulative_return - 110.0).abs() < 1e-6);
-        // cumulative_return from base: (103 - 50) / 50 * 100 = 106%
-        assert!((series[2].cumulative_return - 106.0).abs() < 1e-6);
-        // daily_return should still be day-over-day
+        // cumulative_return = cpnl / cost (inception_value ignored)
+        assert!((series[0].cumulative_return - 0.0).abs() < 1e-6);
+        assert!((series[1].cumulative_return - 5.0).abs() < 1e-6);
+        assert!((series[2].cumulative_return - 3.0).abs() < 1e-6);
+        // daily_return should still be day-over-day value change
         assert!((series[0].daily_return - 0.0).abs() < 1e-6);
         // (105 - 100) / 100 * 100 = 5%
         assert!((series[1].daily_return - 5.0).abs() < 0.01);
@@ -1436,7 +1546,7 @@ mod tests {
     #[test]
     fn test_build_return_series_single_point() {
         let daily = vec![
-            (parse_date("2024-01-01").unwrap(), 100.0, 0.0),
+            (parse_date("2024-01-01").unwrap(), 100.0, 100.0, 0.0, 0.0),
         ];
         let series = build_return_series(&daily, None);
         assert_eq!(series.len(), 1);
@@ -1446,13 +1556,15 @@ mod tests {
 
     #[test]
     fn test_build_return_series_zero_start_value() {
+        // When cost is 0 (e.g., before any investment), return should be 0
         let daily = vec![
-            (parse_date("2024-01-01").unwrap(), 0.0, 0.0),
-            (parse_date("2024-01-02").unwrap(), 100.0, 100.0),
+            (parse_date("2024-01-01").unwrap(), 0.0, 0.0, 0.0, 0.0),
+            (parse_date("2024-01-02").unwrap(), 100.0, 100.0, 100.0, 0.0),
         ];
         let series = build_return_series(&daily, None);
-        // With zero start, cumulative_return should be 0.0 (guarded by if start_value > 0.0)
+        // cost=0 → cumulative_return guarded to 0
         assert!((series[0].cumulative_return - 0.0).abs() < 1e-6);
+        // Day2: cpnl=0/cost=100 = 0%
         assert!((series[1].cumulative_return - 0.0).abs() < 1e-6);
     }
 }
