@@ -315,6 +315,7 @@ export default function CryptoContractPage() {
       title: "保证金",
       dataIndex: "margin",
       key: "margin",
+      sorter: (a: CryptoContract, b: CryptoContract) => a.margin - b.margin,
       render: (v: number) => `$${v.toFixed(2)}`,
     },
     {
@@ -604,6 +605,21 @@ export default function CryptoContractPage() {
                       },
                     },
                     {
+                      title: "数量",
+                      key: "qty",
+                      width: 90,
+                      render: (_: unknown, h: ContractHistory) => {
+                        if (h.action_type === "close") {
+                          return <span>{(h.close_shares ?? 0).toFixed(4)}</span>;
+                        }
+                        if (h.action_type === "add") {
+                          return <span className="text-blue-600">+{(h.add_shares ?? 0).toFixed(4)}</span>;
+                        }
+                        // open：close_shares 字段存了开仓数量
+                        return <span className="text-green-600">{(h.close_shares ?? 0).toFixed(4)}</span>;
+                      },
+                    },
+                    {
                       title: "结果",
                       key: "result",
                       render: (_: unknown, h: ContractHistory) => {
@@ -619,14 +635,16 @@ export default function CryptoContractPage() {
                             </span>
                           );
                         }
-                        return (
-                          <span>
-                            <span className="text-blue-600">+{(h.add_shares ?? 0).toFixed(2)}</span>
-                            <span className="text-xs text-gray-400 ml-1">均{(h.new_avg_price ?? 0).toFixed(2)}</span>
-                          </span>
-                        );
+                        if (h.action_type === "add") {
+                          return (
+                            <span>
+                              <span className="text-blue-600">+{(h.add_shares ?? 0).toFixed(2)}</span>
+                              <span className="text-xs text-gray-400 ml-1">均{(h.new_avg_price ?? 0).toFixed(2)}</span>
+                            </span>
+                          );
+                        }
                         // open
-                        return <span className="text-gray-300">—</span>;
+                        return <span className="text-gray-400">—</span>;
                       },
                     },
                     {
