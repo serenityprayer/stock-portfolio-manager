@@ -632,20 +632,59 @@ pub fn get_return_attribution(
         rows.into_iter().collect()
     };
 
-    // Fetch holding cost (avg_cost * shares) for symbols that have no
-    // snapshot on the start date (opened before the analysis period).
-    let holding_cost_map: std::collections::HashMap<String, f64> = {
-        let mut map = std::collections::HashMap::new();
-        let mut stmt = conn
-            .prepare("SELECT symbol, avg_cost * shares FROM holdings")
-            .map_err(|e| e.to_string())?;
+    // Also include symbols that had transactions during the period.
+    // A position may have been opened AND closed during the period,
+    // so it appears in neither start_vals nor end_vals.
+    let tx_symbols: std::collections::HashSet<String> = {
+        let mut sql = String::from(
+            "SELECT DISTINCT symbol FROM transactions
+             WHERE DATE(traded_at) > ?1 AND DATE(traded_at) <= ?2",
+        );
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
+            Box::new(start_str.clone()),
+            Box::new(end_str.clone()),
+        ];
+        if let Some(ref account_id) = filter.account_id {
+            sql.push_str(&format!(" AND account_id = ?{}", params.len() + 1));
+            params.push(Box::new(account_id.clone()));
+        }
+        if let Some(ref market) = filter.market {
+            sql.push_str(&format!(" AND market = ?{}", params.len() + 1));
+            params.push(Box::new(market.clone()));
+        }
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?)))
+            .query_map(param_refs.as_slice(), |row| row.get::<_, String>(0))
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
-        for (sym, cost) in rows {
-            map.insert(sym, cost);
+        rows.into_iter().collect()
+    };
+
+    // Fetch market and category for ALL symbols (including closed positions
+    // where shares=0, so they may not appear in start_vals or end_vals).
+    let symbol_meta: std::collections::HashMap<String, (String, String)> = {
+        let mut map = std::collections::HashMap::new();
+        let mut stmt = conn
+            .prepare(
+                "SELECT h.symbol, h.market, COALESCE(c.name, '未分类')
+                 FROM holdings h
+                 LEFT JOIN categories c ON h.category_id = c.id",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                let sym = row.get::<_, String>(0)?;
+                let mkt = row.get::<_, String>(1)?;
+                let cat = row.get::<_, String>(2)?;
+                Ok((sym, (mkt, cat)))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        for (sym, (mkt, cat)) in rows {
+            map.insert(sym, (mkt, cat));
         }
         map
     };
@@ -653,6 +692,7 @@ pub fn get_return_attribution(
     let all_symbols: std::collections::HashSet<String> = start_vals
         .keys()
         .chain(end_vals.keys())
+        .chain(tx_symbols.iter())
         .cloned()
         .collect();
 
@@ -666,58 +706,43 @@ pub fn get_return_attribution(
         std::collections::HashMap::new();
 
     for sym in &all_symbols {
-        // Skip cash symbols ($CASH-CNY, $CASH-USD, $CASH-HKD) from attribution.
-        // Cash holdings don't have entries in the transactions table, so their
-        // PnL = ev − sv reflects the cash flow from buying/selling stocks, NOT
-        // actual investment returns. Including them double-counts the trade
-        // amounts that are already subtracted from individual stock PnLs.
         if crate::services::quote_service::is_cash_symbol(sym) {
             continue;
         }
 
-        // Get market and category: prefer start_vals (actual at start_date),
-        // fall back to end_vals (for newly opened positions after start_date).
-        let (market, cat, sv) = start_vals
+        // market & category: prefer symbol_meta (from holdings table, works even for closed positions)
+        let (market, cat) = symbol_meta
             .get(sym)
-            .map(|(m, c, v)| (m.clone(), c.clone(), *v))
-            .unwrap_or_else(|| {
-                end_vals
-                    .get(sym)
-                    .map(|(m, c, _)| (m.clone(), c.clone(), 0.0))
-                    .unwrap_or_else(|| ("Unknown".to_string(), "未分类".to_string(), 0.0))
-            });
+            .map(|(m, c)| (m.clone(), c.clone()))
+            .unwrap_or_else(|| ("Unknown".to_string(), "未分类".to_string()));
+
+        // start value: from start_vals if available, otherwise 0
+        let sv = start_vals
+            .get(sym)
+            .map(|(_, _, v)| *v)
+            .unwrap_or(0.0);
         let ev = end_vals.get(sym).map(|(_, _, v)| *v).unwrap_or(0.0);
         let cf = net_cash_flows.get(sym).copied().unwrap_or(0.0);
 
-        // Compute PnL correctly for three cases:
-        // 1. sv > 0:  Had position at start.  PnL = ev - sv - cf.
-        // 2. sv = 0, cf > 0:  Bought during period.  Cost = cf, PnL = ev - cf.
-        // 3. sv = 0, cf <= 0:  Position existed before period (no start snapshot
-        //    because start_date is before first snapshot).  Use holdings.avg_cost
-        //    as cost basis.  PnL = ev - cost_basis.
-        let (actual_sv, pnl) = if sv > 0.0 {
-            (sv, ev - sv - cf)
-        } else if cf > 0.0 {
-            // New position opened during the period
-            (cf, ev - cf)
-        } else {
-            // Position existed before period but no start snapshot
-            let cost = holding_cost_map.get(sym).copied().unwrap_or(ev);
-            (cost, ev - cost)
-        };
+        // PnL = end_value - start_value - net_cash_flow
+        // This works for all cases:
+        // - Held all period: pnl = market_value_change - net_invested
+        // - Opened during period: pnl = ev - invested_cost
+        // - Closed during period: pnl = -cf (realized PnL)
+        let pnl = ev - sv - cf;
 
         total_pnl += pnl;
-        total_start_val += actual_sv;
+        total_start_val += sv;
         *market_pnl.entry(market.clone()).or_insert(0.0) += pnl;
         *category_pnl.entry(cat.clone()).or_insert(0.0) += pnl;
         holding_pnl
             .entry(sym.clone())
             .and_modify(|e| {
                 e.2 += pnl;
-                e.3 += actual_sv;
+                e.3 += sv;
                 e.4 += ev;
             })
-            .or_insert((market, cat, pnl, actual_sv, ev));
+            .or_insert((market, cat, pnl, sv, ev));
     }
 
     let make_items =
@@ -835,7 +860,7 @@ pub fn get_monthly_returns(
     let mut result = Vec::new();
 
     for (i, &key) in keys.iter().enumerate() {
-        let (_, first_v, first_cost, _, end_v, end_cost, end_cum_pnl) = months[&key];
+        let (_, first_v, first_cost, _, end_v, _end_cost, end_cum_pnl) = months[&key];
 
         // Monthly return based on PnL delta relative to cost basis,
         // NOT raw value delta (which conflates capital inflows with gains).
