@@ -662,13 +662,14 @@ pub fn get_return_attribution(
         rows.into_iter().collect()
     };
 
-    // Fetch market and category for ALL symbols (including closed positions
-    // where shares=0, so they may not appear in start_vals or end_vals).
-    let symbol_meta: std::collections::HashMap<String, (String, String)> = {
+    // Fetch market, category AND shares for ALL symbols (including closed
+    // positions).  Shares=0 means the position is fully closed; stale snapshots
+    // (from before the sell date) may still show it as held.
+    let symbol_meta: std::collections::HashMap<String, (String, String, f64)> = {
         let mut map = std::collections::HashMap::new();
         let mut stmt = conn
             .prepare(
-                "SELECT h.symbol, h.market, COALESCE(c.name, '未分类')
+                "SELECT h.symbol, h.market, COALESCE(c.name, '未分类'), h.shares
                  FROM holdings h
                  LEFT JOIN categories c ON h.category_id = c.id",
             )
@@ -678,13 +679,14 @@ pub fn get_return_attribution(
                 let sym = row.get::<_, String>(0)?;
                 let mkt = row.get::<_, String>(1)?;
                 let cat = row.get::<_, String>(2)?;
-                Ok((sym, (mkt, cat)))
+                let shares = row.get::<_, f64>(3)?;
+                Ok((sym, (mkt, cat, shares)))
             })
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
-        for (sym, (mkt, cat)) in rows {
-            map.insert(sym, (mkt, cat));
+        for (sym, meta) in rows {
+            map.insert(sym, meta);
         }
         map
     };
@@ -710,18 +712,26 @@ pub fn get_return_attribution(
             continue;
         }
 
-        // market & category: prefer symbol_meta (from holdings table, works even for closed positions)
-        let (market, cat) = symbol_meta
+        // market & category: from symbol_meta (holdings table, works for closed positions)
+        let (market, cat, shares_in_holdings) = symbol_meta
             .get(sym)
-            .map(|(m, c)| (m.clone(), c.clone()))
-            .unwrap_or_else(|| ("Unknown".to_string(), "未分类".to_string()));
+            .map(|(m, c, s)| (m.clone(), c.clone(), *s))
+            .unwrap_or_else(|| ("Unknown".to_string(), "未分类".to_string(), 0.0));
 
         // start value: from start_vals if available, otherwise 0
         let sv = start_vals
             .get(sym)
             .map(|(_, _, v)| *v)
             .unwrap_or(0.0);
-        let ev = end_vals.get(sym).map(|(_, _, v)| *v).unwrap_or(0.0);
+        let raw_ev = end_vals.get(sym).map(|(_, _, v)| *v).unwrap_or(0.0);
+        // CRITICAL: if the position is fully closed (shares=0 in holdings)
+        // but the latest snapshot still shows a market value (snapshot is
+        // from before the sell date), force ev to 0.
+        let ev = if shares_in_holdings == 0.0 && raw_ev > 0.0 {
+            0.0
+        } else {
+            raw_ev
+        };
         let cf = net_cash_flows.get(sym).copied().unwrap_or(0.0);
 
         // PnL = end_value - start_value - net_cash_flow
