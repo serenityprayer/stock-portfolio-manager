@@ -483,13 +483,19 @@ pub async fn backfill_snapshots(
     // holdings for every date around D).  When `force` is false, only
     // fill in dates that have never been calculated – this lets the UI
     // load quickly from cached data without re-fetching historical prices.
+    //
+    // IMPORTANT: the last 3 calendar days are ALWAYS re-processed,
+    // so that snapshots are updated after recent trades (OPEN/BUY/SELL)
+    // without requiring a forced refresh.
+    let three_days_ago = end_date - chrono::Duration::days(3);
     let has_transactions = force && transactions.iter().any(|tx| tx.trade_date <= end_date);
     let mut d = effective_start;
     while d <= end_date {
         let wd = d.weekday();
         if wd != chrono::Weekday::Sat && wd != chrono::Weekday::Sun {
             let ds = d.format("%Y-%m-%d").to_string();
-            if !existing_dates.contains(&ds) || has_transactions {
+            let is_recent = d >= three_days_ago;
+            if !existing_dates.contains(&ds) || has_transactions || is_recent {
                 missing_dates.push(d);
             }
         }
