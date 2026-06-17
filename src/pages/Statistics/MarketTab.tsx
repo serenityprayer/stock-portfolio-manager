@@ -52,6 +52,8 @@ interface StockAccumulator {
   name: string;
   category_name: string;
   category_color: string;
+  pe_ttm: number | null;
+  dividend_yield: number | null;
 }
 
 export default function MarketTab({ selectedMarket, onMarketChange }: Props) {
@@ -79,6 +81,8 @@ export default function MarketTab({ selectedMarket, onMarketChange }: Props) {
         existing.pnl += h.pnl;
         // All rows for the same symbol share the same live quote; take the last seen.
         existing.current_price = h.current_price;
+        existing.pe_ttm = h.pe_ttm ?? null;
+        existing.dividend_yield = h.dividend_yield ?? null;
       } else {
         map.set(h.symbol, {
           shares: h.shares,
@@ -90,6 +94,8 @@ export default function MarketTab({ selectedMarket, onMarketChange }: Props) {
           name: h.name,
           category_name: h.category_name,
           category_color: h.category_color,
+          pe_ttm: h.pe_ttm ?? null,
+          dividend_yield: h.dividend_yield ?? null,
         });
       }
     }

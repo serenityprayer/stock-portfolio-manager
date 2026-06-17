@@ -167,6 +167,31 @@ export default function HoldingsTable({ holdings, loading, hideAccountMarket = f
       width: 90,
     },
     {
+      title: "PE(TTM)",
+      dataIndex: "pe_ttm",
+      key: "pe_ttm",
+      sorter: (a, b) => (a.pe_ttm ?? -999) - (b.pe_ttm ?? -999),
+      render: (v: number | null) => {
+        if (v == null || v <= 0) return <span style={{ color: "#ccc" }}>--</span>;
+        const color = v < 12 ? "#16a34a" : v < 25 ? "#f59e0b" : "#e53e3e";
+        return <span style={{ color, fontWeight: 600 }}>{v.toFixed(1)}</span>;
+      },
+      align: "right" as const,
+      width: 85,
+    },
+    {
+      title: "股息率",
+      dataIndex: "dividend_yield",
+      key: "dividend_yield",
+      sorter: (a, b) => (a.dividend_yield ?? -1) - (b.dividend_yield ?? -1),
+      render: (v: number | null) => {
+        if (v == null) return <span style={{ color: "#ccc" }}>--</span>;
+        return <span style={{ color: "#16a34a", fontWeight: 600 }}>{v.toFixed(1)}%</span>;
+      },
+      align: "right" as const,
+      width: 80,
+    },
+    {
       title: "盈亏金额",
       dataIndex: "pnl",
       key: "pnl",
