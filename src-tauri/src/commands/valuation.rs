@@ -84,6 +84,8 @@ pub fn get_portfolio_valuation(
                     daily_pnl: 0.0,
                     currency,
                     market_value_usd: market_value, // simplified
+                    pe_ttm: None,
+                    dividend_yield: None,
                 })
             })
             .map_err(|e| e.to_string())?

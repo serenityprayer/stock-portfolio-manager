@@ -1,12 +1,9 @@
-import { Row, Col, Card, Statistic, Spin, Empty, Collapse } from "antd";
+import { Row, Col, Card, Statistic, Spin, Empty } from "antd";
 import PieChart from "../../components/charts/PieChart";
 import BarChart from "../../components/charts/BarChart";
-import ValuationCard, { ValuationTable } from "../../components/ValuationCard";
-import type { StatisticsOverview, PortfolioValuation } from "../../types";
+import type { StatisticsOverview } from "../../types";
 import type { Currency } from "../../types";
 import { usePnlColor } from "../../hooks/usePnlColor";
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 
 const currencySymbol: Record<string, string> = {
   USD: "$",
@@ -18,28 +15,11 @@ interface Props {
   overview: StatisticsOverview | null;
   loading: boolean;
   baseCurrency: Currency;
-  market?: string;
-  accountId?: string;
-  categoryId?: string;
 }
 
-export default function OverviewTab({ overview, loading, baseCurrency, market, accountId, categoryId }: Props) {
+export default function OverviewTab({ overview, loading, baseCurrency }: Props) {
   const { pnlColor } = usePnlColor();
   const symbol = currencySymbol[baseCurrency] ?? "$";
-  const [valuation, setValuation] = useState<PortfolioValuation | null>(null);
-  const [valLoading, setValLoading] = useState(false);
-
-  useEffect(() => {
-    setValLoading(true);
-    invoke<PortfolioValuation>("get_portfolio_valuation", {
-      market: market ?? null,
-      accountId: accountId ?? null,
-      categoryId: categoryId ?? null,
-    })
-      .then(setValuation)
-      .catch((e) => console.warn("get_portfolio_valuation error:", e))
-      .finally(() => setValLoading(false));
-  }, [market, accountId, categoryId]);
 
   if (loading && !overview) {
     return (
@@ -67,72 +47,36 @@ export default function OverviewTab({ overview, loading, baseCurrency, market, a
     <div>
       {/* Summary stats */}
       <Row gutter={[16, 16]} className="mb-4">
-        <Col xs={24} sm={6}>
+        <Col xs={24} sm={8}>
           <Card>
             <Statistic
-              title={`总市值 (${baseCurrency})`}
+              title={}
               value={overview.total_market_value.toFixed(2)}
               prefix={symbol}
             />
           </Card>
         </Col>
-        <Col xs={24} sm={6}>
+        <Col xs={24} sm={8}>
           <Card>
             <Statistic
-              title={`总成本 (${baseCurrency})`}
+              title={}
               value={overview.total_cost.toFixed(2)}
               prefix={symbol}
             />
           </Card>
         </Col>
-        <Col xs={24} sm={6}>
+        <Col xs={24} sm={8}>
           <Card>
             <Statistic
-              title={`总盈亏 (${baseCurrency})`}
-              value={`${totalPnlPos ? "+" : ""}${overview.total_pnl.toFixed(2)}`}
+              title={}
+              value={}
               valueStyle={{ color: pnlColor(overview.total_pnl) }}
               prefix={symbol}
-              suffix={`(${totalPnlPos ? "+" : ""}${overview.total_pnl_percent.toFixed(2)}%)`}
+              suffix={}
             />
           </Card>
         </Col>
-        <Col xs={24} sm={6}>
-          {valuation ? (
-            <Card>
-              <Statistic
-                title="加权PE(TTM)"
-                value={valuation.weighted_pe_ttm?.toFixed(1) ?? "--"}
-                valueStyle={{ fontSize: 22, fontWeight: 700 }}
-                suffix={
-                  <span style={{ fontSize: 11, color: "#8c8c8c" }}>
-                    覆盖{(valuation.pe_coverage * 100).toFixed(0)}%
-                  </span>
-                }
-              />
-            </Card>
-          ) : (
-            <Card loading={valLoading}>
-              <Statistic title="加权PE(TTM)" value="--" />
-            </Card>
-          )}
-        </Col>
       </Row>
-
-      {/* Valuation detail table */}
-      {valuation && valuation.holdings.length > 0 && (
-        <div className="mb-4">
-          <Collapse
-            size="small"
-            items={[
-              {
-                key: "detail",
-                label: `持仓估值明细（${valuation.holdings.length} 个标的）`,
-                children: <ValuationTable valuation={valuation} />,
-              },
-            ]}
-          />
-        </div>
-      )}
 
       {/* Distribution charts */}
       <Row gutter={[16, 16]}>

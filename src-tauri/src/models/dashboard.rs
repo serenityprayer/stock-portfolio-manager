@@ -36,4 +36,6 @@ pub struct HoldingDetail {
     pub currency: String,
     /// Market value normalised to USD for cross-currency comparison/sorting.
     pub market_value_usd: f64,
+    pub pe_ttm: Option<f64>,
+    pub dividend_yield: Option<f64>,
 }

@@ -241,6 +241,8 @@ export interface HoldingDetail {
   currency: Currency;
   /** Market value normalised to USD for cross-currency sorting. */
   market_value_usd: number;
+  pe_ttm: number | null;
+  dividend_yield: number | null;
 }
 
 // Phase 3: Statistics types
