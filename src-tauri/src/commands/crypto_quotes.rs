@@ -133,6 +133,8 @@ async fn fetch_from_gateio(symbol: &str) -> Result<StockQuote, String> {
         high,
         low,
         volume,
+        pe_ttm: None,
+        dividend_yield: None,
         updated_at: Utc::now().to_rfc3339(),
     })
 }
@@ -216,6 +218,8 @@ async fn fetch_from_binance(symbol: &str) -> Result<StockQuote, String> {
         high,
         low,
         volume,
+        pe_ttm: None,
+        dividend_yield: None,
         updated_at: Utc::now().to_rfc3339(),
     })
 }

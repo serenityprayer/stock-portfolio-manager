@@ -18,3 +18,4 @@ pub mod review;
 pub mod snapshots;
 pub mod statistics;
 pub mod transactions;
+pub mod valuation;

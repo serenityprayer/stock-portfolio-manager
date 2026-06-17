@@ -582,9 +582,21 @@ impl Database {
                 high REAL NOT NULL DEFAULT 0,
                 low REAL NOT NULL DEFAULT 0,
                 volume INTEGER NOT NULL DEFAULT 0,
+                pe_ttm REAL,
+                dividend_yield REAL,
                 updated_at TEXT NOT NULL
             );
         ")?;
+
+        // Add pe_ttm / dividend_yield columns for existing databases
+        let _ = conn.execute(
+            "ALTER TABLE cached_quotes ADD COLUMN pe_ttm REAL",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE cached_quotes ADD COLUMN dividend_yield REAL",
+            [],
+        );
 
         conn.execute_batch("
             CREATE TABLE IF NOT EXISTS cached_exchange_rates (

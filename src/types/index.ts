@@ -171,6 +171,8 @@ export interface StockQuote {
   high: number;
   low: number;
   volume: number;
+  pe_ttm: number | null;
+  dividend_yield: number | null;
   updated_at: string;
 }
 
@@ -745,5 +747,26 @@ export interface QuoteProviderConfig {
   us_adjust_sell_pay_cost?: boolean;
   /** HK stock: adjust avg_cost on SELL and dividend. Default false. */
   hk_adjust_sell_pay_cost?: boolean;
+}
+
+// --- Valuation ---
+
+export interface HoldingValuation {
+  symbol: string;
+  name: string;
+  market: string;
+  weight: number;
+  pe_ttm: number | null;
+  dividend_yield: number | null;
+  market_value: number;
+}
+
+export interface PortfolioValuation {
+  total_market_value: number;
+  weighted_pe_ttm: number | null;
+  weighted_dividend_yield: number;
+  pe_coverage: number;
+  pe_count: number;
+  holdings: HoldingValuation[];
 }
 

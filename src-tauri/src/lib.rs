@@ -260,6 +260,8 @@ pub fn run() {
             commands::crypto_contract::close_crypto_contract,
             commands::crypto_contract::add_crypto_position,
             commands::crypto_contract::list_contract_history,
+            // Valuation
+            commands::valuation::get_portfolio_valuation,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

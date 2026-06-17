@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>组合估值概览 — 原型预览</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --card-bg: #ffffff;
+    --text: #1a1a2e;
+    --text-secondary: #6b7280;
+    --text-muted: #9ca3af;
+    --border: #e5e7eb;
+    --red: #e53e3e;
+    --green: #16a34a;
+    --blue: #3b82f6;
+    --warning: #f59e0b;
+    --radius: 12px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 24px;
+  }
+  h2 { font-size: 18px; margin-bottom: 16px; color: var(--text); }
+
+  /* === Valuation Summary Card === */
+  .valuation-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .metric-card {
+    background: var(--card-bg);
+    border-radius: var(--radius);
+    padding: 20px;
+    border: 1px solid var(--border);
+  }
+  .metric-card .label {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .metric-card .value {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--text);
+  }
+  .metric-card .note {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+  .badge {
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-weight: 500;
+  }
+  .badge-green { background: #dcfce7; color: var(--green); }
+  .badge-red { background: #fef2f2; color: var(--red); }
+
+  /* === Benchmark Compare === */
+  .bench-row {
+    background: var(--card-bg);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    border: 1px solid var(--border);
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 32px;
+    flex-wrap: wrap;
+  }
+  .bench-row .item { font-size: 14px; }
+  .bench-row .item .label { font-size: 12px; color: var(--text-secondary); }
+  .bench-row .item .val { font-size: 20px; font-weight: 600; }
+  .bench-row .divider { width: 1px; height: 40px; background: var(--border); }
+
+  /* === Holdings Table === */
+  .table-card {
+    background: var(--card-bg);
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .table-card h3 {
+    font-size: 15px;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  th, td {
+    padding: 10px 20px;
+    text-align: left;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+  th {
+    background: #f9fafb;
+    color: var(--text-secondary);
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  td { border-bottom: 1px solid #f3f4f6; }
+  tr:last-child td { border-bottom: none; }
+  .sym { font-weight: 600; color: var(--text); }
+  .name { color: var(--text-secondary); }
+  .weight .bar-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .weight .bar-bg {
+    width: 60px;
+    height: 6px;
+    background: #f3f4f6;
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .weight .bar-fill { height: 100%; background: var(--blue); border-radius: 3px; }
+  .pe { font-weight: 600; }
+  .pe-low { color: var(--green); }
+  .pe-mid { color: var(--warning); }
+  .pe-high { color: var(--red); }
+  .div-yield { font-weight: 600; color: var(--green); }
+  .mv { text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* total row */
+  tr.total td {
+    font-weight: 700;
+    border-top: 2px solid var(--border);
+    background: #f9fafb;
+  }
+
+  /* toggle tabs */
+  .tabs {
+    display: flex;
+    gap: 0;
+    margin-bottom: 16px;
+  }
+  .tabs button {
+    padding: 8px 20px;
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    font-size: 13px;
+    cursor: pointer;
+    color: var(--text-secondary);
+  }
+  .tabs button:first-child { border-radius: 8px 0 0 8px; }
+  .tabs button:last-child { border-radius: 0 8px 8px 0; }
+  .tabs button.active {
+    background: var(--blue);
+    color: #fff;
+    border-color: var(--blue);
+    font-weight: 600;
+  }
+</style>
+</head>
+<body>
+
+<div class="tabs">
+  <button class="active">估值概览</button>
+  <button>持仓明细</button>
+</div>
+
+<h2>组合估值概览</h2>
+
+<!-- Summary Metric Cards -->
+<div class="valuation-grid">
+  <div class="metric-card">
+    <div class="label">
+      加权PE (TTM)
+      <span class="badge badge-green">覆盖率 92%</span>
+    </div>
+    <div class="value">16.8</div>
+    <div class="note">仅纳入盈利标的（PE > 0）</div>
+  </div>
+  <div class="metric-card">
+    <div class="label">加权股息率</div>
+    <div class="value">1.2%</div>
+    <div class="note">TTM 股息 / 当前市值</div>
+  </div>
+  <div class="metric-card">
+    <div class="label">组合总市值</div>
+    <div class="value">$4,973</div>
+    <div class="note">基于最新行情</div>
+  </div>
+</div>
+
+<!-- Benchmark Comparison -->
+<div class="bench-row">
+  <div class="item">
+    <div class="label">📊 沪深300 PE</div>
+    <div class="val">12.5</div>
+  </div>
+  <div class="divider"></div>
+  <div class="item">
+    <div class="label">📊 标普500 PE</div>
+    <div class="val">24.3</div>
+  </div>
+  <div class="divider"></div>
+  <div class="item">
+    <div class="label">⚖️ 相对沪深300</div>
+    <div class="val" style="color:var(--red)">+34%</div>
+  </div>
+  <div class="divider"></div>
+  <div class="item">
+    <div class="label">⚖️ 相对标普500</div>
+    <div class="val" style="color:var(--green)">-31%</div>
+  </div>
+</div>
+
+<!-- Holdings Detail Table -->
+<div class="table-card">
+  <h3>持仓估值明细（按仓位降序）</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>代码</th>
+        <th>名称</th>
+        <th>仓位%</th>
+        <th>PE(TTM)</th>
+        <th>股息率</th>
+        <th style="text-align:right">市值</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="sym">META</span></td>
+        <td><span class="name">Meta Platforms</span></td>
+        <td class="weight"><div class="bar-wrap"><div class="bar-bg"><div class="bar-fill" style="width:32%"></div></div>32.1%</div></td>
+        <td class="pe pe-high">30.2</td>
+        <td class="div-yield">0.3%</td>
+        <td class="mv">$1,590</td>
+      </tr>
+      <tr>
+        <td><span class="sym">PDD</span></td>
+        <td><span class="name">拼多多</span></td>
+        <td class="weight"><div class="bar-wrap"><div class="bar-bg"><div class="bar-fill" style="width:25%"></div></div>24.5%</div></td>
+        <td class="pe pe-low">9.8</td>
+        <td class="div-yield">--</td>
+        <td class="mv">$1,219</td>
+      </tr>
+      <tr>
+        <td><span class="sym">PBR.A</span></td>
+        <td><span class="name">巴西石油公司</span></td>
+        <td class="weight"><div class="bar-wrap"><div class="bar-bg"><div class="bar-fill" style="width:12%"></div></div>12.2%</div></td>
+        <td class="pe pe-low">4.5</td>
+        <td class="div-yield">8.2%</td>
+        <td class="mv">$605</td>
+      </tr>
+      <tr>
+        <td><span class="sym">TCEHY</span></td>
+        <td><span class="name">腾讯控股ADR</span></td>
+        <td class="weight"><div class="bar-wrap"><div class="bar-bg"><div class="bar-fill" style="width:11%"></div></div>11.4%</div></td>
+        <td class="pe pe-mid">22.1</td>
+        <td class="div-yield">0.4%</td>
+        <td class="mv">$568</td>
+      </tr>
+      <tr>
+        <td><span class="sym">TCOM</span></td>
+        <td><span class="name">携程</span></td>
+        <td class="weight"><div class="bar-wrap"><div class="bar-bg"><div class="bar-fill" style="width:9%"></div></div>9.3%</div></td>
+        <td class="pe pe-mid">18.5</td>
+        <td class="div-yield">--</td>
+        <td class="mv">$462</td>
+      </tr>
+      <tr>
+        <td><span class="sym">DDL</span></td>
+        <td><span class="name">叮咚买菜</span></td>
+        <td class="weight"><div class="bar-wrap"><div class="bar-bg"><div class="bar-fill" style="width:9%"></div></div>9.3%</div></td>
+        <td class="pe pe-high" style="color:var(--text-muted)">--</td>
+        <td class="div-yield" style="color:var(--text-muted)">--</td>
+        <td class="mv">$461</td>
+      </tr>
+      <tr>
+        <td><span class="sym">GOOG</span></td>
+        <td><span class="name">谷歌</span></td>
+        <td class="weight"><div class="bar-wrap"><div class="bar-bg"><div class="bar-fill" style="width:7%"></div></div>7.4%</div></td>
+        <td class="pe pe-mid">22.8</td>
+        <td class="div-yield">0.5%</td>
+        <td class="mv">$369</td>
+      </tr>
+      <tr>
+        <td><span class="sym">MOMO</span></td>
+        <td><span class="name">挚文集团</span></td>
+        <td class="weight"><div class="bar-wrap"><div class="bar-bg"><div class="bar-fill" style="width:7%"></div></div>6.9%</div></td>
+        <td class="pe pe-low">5.2</td>
+        <td class="div-yield">3.5%</td>
+        <td class="mv">$344</td>
+      </tr>
+      <tr>
+        <td><span class="sym">NET</span></td>
+        <td><span class="name">Cloudflare</span></td>
+        <td class="weight"><div class="bar-wrap"><div class="bar-bg"><div class="bar-fill" style="width:5%"></div></div>4.6%</div></td>
+        <td class="pe pe-high" style="color:var(--text-muted)">--</td>
+        <td class="div-yield" style="color:var(--text-muted)">--</td>
+        <td class="mv">$231</td>
+      </tr>
+      <tr>
+        <td><span class="sym">SHEL</span></td>
+        <td><span class="name">壳牌</span></td>
+        <td class="weight"><div class="bar-wrap"><div class="bar-bg"><div class="bar-fill" style="width:5%"></div></div>5.0%</div></td>
+        <td class="pe pe-low">7.1</td>
+        <td class="div-yield">4.8%</td>
+        <td class="mv">$247</td>
+      </tr>
+      <tr>
+        <td><span class="sym">NOK</span></td>
+        <td><span class="name">诺基亚</span></td>
+        <td class="weight"><div class="bar-wrap"><div class="bar-bg"><div class="bar-fill" style="width:4%"></div></div>4.2%</div></td>
+        <td class="pe pe-mid">15.8</td>
+        <td class="div-yield">3.0%</td>
+        <td class="mv">$207</td>
+      </tr>
+      <tr>
+        <td><span class="sym">SY</span></td>
+        <td><span class="name">So-Young</span></td>
+        <td class="weight"><div class="bar-wrap"><div class="bar-bg"><div class="bar-fill" style="width:3%"></div></div>3.5%</div></td>
+        <td class="pe pe-mid">12.0</td>
+        <td class="div-yield">--</td>
+        <td class="mv">$172</td>
+      </tr>
+      <tr class="total">
+        <td><strong>合计</strong></td>
+        <td><span class="name">12 个持仓</span></td>
+        <td class="weight"><strong>100%</strong></td>
+        <td class="pe"><strong>16.8</strong></td>
+        <td class="div-yield"><strong>1.2%</strong></td>
+        <td class="mv">$5,005</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+</body>
+</html>

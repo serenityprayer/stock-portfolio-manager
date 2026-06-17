@@ -14,6 +14,7 @@ pub mod quote_provider;
 pub mod review;
 pub mod statistics;
 pub mod transaction;
+pub mod valuation;
 
 pub use account::Account;
 pub use category::Category;

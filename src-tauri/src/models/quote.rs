@@ -12,6 +12,8 @@ pub struct StockQuote {
     pub high: f64,
     pub low: f64,
     pub volume: u64,
+    pub pe_ttm: Option<f64>,
+    pub dividend_yield: Option<f64>,
     pub updated_at: String,
 }
 

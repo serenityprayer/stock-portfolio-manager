@@ -63,6 +63,8 @@ pub fn make_cash_quote(symbol: &str, market: &str) -> StockQuote {
         high: 1.0,
         low: 1.0,
         volume: 0,
+        pe_ttm: None,
+        dividend_yield: None,
         updated_at: Utc::now().to_rfc3339(),
     }
 }
@@ -147,7 +149,8 @@ pub fn load_quotes_from_db(db: &Database) -> Result<Vec<StockQuote>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT symbol, name, market, current_price, previous_close,
-                    change, change_percent, high, low, volume, updated_at
+                    change, change_percent, high, low, volume,
+                    pe_ttm, dividend_yield, updated_at
              FROM cached_quotes",
         )
         .map_err(|e| e.to_string())?;
@@ -164,7 +167,9 @@ pub fn load_quotes_from_db(db: &Database) -> Result<Vec<StockQuote>, String> {
                 high: row.get(7)?,
                 low: row.get(8)?,
                 volume: row.get(9)?,
-                updated_at: row.get(10)?,
+                pe_ttm: row.get(10)?,
+                dividend_yield: row.get(11)?,
+                updated_at: row.get(12)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -179,8 +184,9 @@ pub fn save_quotes_to_db(db: &Database, quotes: &[StockQuote]) -> Result<(), Str
         .prepare(
             "INSERT OR REPLACE INTO cached_quotes
                 (symbol, name, market, current_price, previous_close,
-                 change, change_percent, high, low, volume, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                 change, change_percent, high, low, volume,
+                 pe_ttm, dividend_yield, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         )
         .map_err(|e| e.to_string())?;
     for q in quotes {
@@ -195,6 +201,8 @@ pub fn save_quotes_to_db(db: &Database, quotes: &[StockQuote]) -> Result<(), Str
             q.high,
             q.low,
             q.volume as i64,
+            q.pe_ttm,
+            q.dividend_yield,
             q.updated_at,
         ])
         .map_err(|e| e.to_string())?;
@@ -390,6 +398,8 @@ pub async fn fetch_yahoo_quote(symbol: &str, market: &str) -> Result<StockQuote,
         high: meta.regular_market_day_high.unwrap_or(0.0),
         low: meta.regular_market_day_low.unwrap_or(0.0),
         volume,
+        pe_ttm: None,
+        dividend_yield: None,
         updated_at: Utc::now().to_rfc3339(),
     })
 }
@@ -522,6 +532,8 @@ struct EastMoneyData {
     f169: Option<f64>,
     /// Change percentage
     f170: Option<f64>,
+    f9: Option<f64>,
+    f167: Option<f64>,
 }
 
 /// Fetch a CN A-share stock quote from East Money (东方财富).
@@ -531,7 +543,7 @@ async fn fetch_eastmoney_cn_quote(symbol: &str) -> Result<StockQuote, String> {
     let symbol = symbol.to_lowercase();
     let secid = to_eastmoney_secid(&symbol)?;
     let url = format!(
-        "https://push2.eastmoney.com/api/qt/stock/get?fltt=2&invt=2&fields=f43,f44,f45,f47,f58,f60,f169,f170&secid={}",
+        "https://push2.eastmoney.com/api/qt/stock/get?fltt=2&invt=2&fields=f43,f44,f45,f47,f58,f60,f169,f170,f9,f167&secid={}",
         secid
     );
 
@@ -560,7 +572,7 @@ async fn fetch_eastmoney_cn_quote(symbol: &str) -> Result<StockQuote, String> {
 async fn fetch_eastmoney_us_quote(symbol: &str) -> Result<StockQuote, String> {
     let secid = to_eastmoney_us_secid(symbol);
     let url = format!(
-        "https://push2.eastmoney.com/api/qt/stock/get?fltt=2&invt=2&fields=f43,f44,f45,f47,f58,f60,f169,f170&secid={}",
+        "https://push2.eastmoney.com/api/qt/stock/get?fltt=2&invt=2&fields=f43,f44,f45,f47,f58,f60,f169,f170,f9,f167&secid={}",
         secid
     );
 
@@ -589,7 +601,7 @@ async fn fetch_eastmoney_us_quote(symbol: &str) -> Result<StockQuote, String> {
 async fn fetch_eastmoney_hk_quote(symbol: &str) -> Result<StockQuote, String> {
     let secid = to_eastmoney_hk_secid(symbol)?;
     let url = format!(
-        "https://push2.eastmoney.com/api/qt/stock/get?fltt=2&invt=2&fields=f43,f44,f45,f47,f58,f60,f169,f170&secid={}",
+        "https://push2.eastmoney.com/api/qt/stock/get?fltt=2&invt=2&fields=f43,f44,f45,f47,f58,f60,f169,f170,f9,f167&secid={}",
         secid
     );
 
@@ -683,6 +695,8 @@ fn parse_eastmoney_quote(symbol: &str, market: &str, resp: EastMoneyResponse) ->
     let high = data.f44.unwrap_or(0.0);
     let low = data.f45.unwrap_or(0.0);
     let volume = data.f47.unwrap_or(0.0) as u64;
+    let pe_ttm = data.f9;
+    let dividend_yield = data.f167;
 
     Ok(StockQuote {
         symbol: symbol.to_string(),
@@ -695,6 +709,8 @@ fn parse_eastmoney_quote(symbol: &str, market: &str, resp: EastMoneyResponse) ->
         high,
         low,
         volume,
+        pe_ttm,
+        dividend_yield,
         updated_at: Utc::now().to_rfc3339(),
     })
 }
@@ -999,6 +1015,8 @@ struct XueqiuQuote {
     low: Option<f64>,
     /// Volume
     volume: Option<f64>,
+    pe_ttm: Option<f64>,
+    dividend_yield: Option<f64>,
 }
 
 /// Xueqiu kline (historical candlestick) API response wrapper.
@@ -1068,6 +1086,8 @@ fn parse_xueqiu_quote(symbol: &str, market: &str, resp: XueqiuResponse) -> Resul
     let high = quote.high.unwrap_or(0.0);
     let low = quote.low.unwrap_or(0.0);
     let volume = quote.volume.unwrap_or(0.0) as u64;
+    let pe_ttm = quote.pe_ttm;
+    let dividend_yield = quote.dividend_yield;
 
     Ok(StockQuote {
         symbol: symbol.to_string(),
@@ -1080,6 +1100,8 @@ fn parse_xueqiu_quote(symbol: &str, market: &str, resp: XueqiuResponse) -> Resul
         high,
         low,
         volume,
+        pe_ttm,
+        dividend_yield,
         updated_at: Utc::now().to_rfc3339(),
     })
 }
