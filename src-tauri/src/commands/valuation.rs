@@ -44,14 +44,18 @@ pub fn get_portfolio_valuation(
         let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let rows = stmt
             .query_map(param_refs.as_slice(), |row| {
-                let symbol: String = row.get(2)?;
-                let name: String = row.get(3)?;
-                let market: String = row.get(4)?;
-                let category_name: String = row.get(5)?;
-                let category_color: String = row.get(6)?;
-                let shares: f64 = row.get(7)?;
-                let avg_cost: f64 = row.get(8)?;
-                let currency: String = row.get(9)?;
+                // SELECT order: id(0), account_id(1), account_name(2),
+                //                symbol(3), name(4), market(5),
+                //                category_name(6), category_color(7),
+                //                shares(8), avg_cost(9), currency(10)
+                let symbol: String = row.get(3)?;
+                let name: String = row.get(4)?;
+                let market: String = row.get(5)?;
+                let category_name: String = row.get(6)?;
+                let category_color: String = row.get(7)?;
+                let shares: f64 = row.get(8)?;
+                let avg_cost: f64 = row.get(9)?;
+                let currency: String = row.get(10)?;
 
                 // Lookup quote for current price
                 let current_price = quote_cache.get(&symbol).map(|q| q.current_price).unwrap_or(avg_cost);
