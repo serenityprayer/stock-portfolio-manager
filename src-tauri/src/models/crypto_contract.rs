@@ -60,6 +60,16 @@ impl CryptoContract {
         // 估算强平价格
         // - crypto: 交易所维持保证金率约 0.5%
         // - tradfi: 美股融资维持保证金率 50%
+        //
+        // 推导（做多）: 入场价 P, 杠杆 L, 维持保证金率 m
+        //   初始保证金 = P/L, 强平价 X 时亏损 = P-X
+        //   剩余权益 = P/L - (P-X) = X + P/L - P
+        //   维持保证金要求 = m × X
+        //   联立: X + P/L - P = mX → X(1-m) = P(L-1)/L → X = P(L-1)/(L(1-m))
+        //
+        // 推导（做空）:
+        //   剩余权益 = P/L - (X-P) = P/L + P - X
+        //   P/L + P - X = mX → X(1+m) = P(L+1)/L → X = P(L+1)/(L(1+m))
         let liquidation_price = if leverage > 0.0 {
             let maintenance_margin_rate = if asset_type == "tradfi" {
                 0.5
@@ -67,8 +77,8 @@ impl CryptoContract {
                 0.005
             };
             match position_type.as_str() {
-                "long" => Some(open_price * (1.0 - (1.0 / leverage) + maintenance_margin_rate)),
-                "short" => Some(open_price * (1.0 + (1.0 / leverage) + maintenance_margin_rate)),
+                "long" => Some(open_price * (1.0 - 1.0 / leverage) / (1.0 - maintenance_margin_rate)),
+                "short" => Some(open_price * (1.0 + 1.0 / leverage) / (1.0 + maintenance_margin_rate)),
                 _ => None,
             }
         } else {
