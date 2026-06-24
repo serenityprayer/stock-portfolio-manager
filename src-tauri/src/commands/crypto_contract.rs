@@ -156,8 +156,8 @@ pub fn update_crypto_contract(
     let liquidation_price = if leverage > 0.0 && asset_type == "crypto" {
         let maintenance_margin_rate = 0.005;
         match position_type.as_str() {
-            "long" => Some(open_price * (1.0 - (1.0 / leverage) + maintenance_margin_rate)),
-            "short" => Some(open_price * (1.0 + (1.0 / leverage) - maintenance_margin_rate)),
+            "long" => Some(open_price * (1.0 - 1.0 / leverage) / (1.0 - maintenance_margin_rate)),
+            "short" => Some(open_price * (1.0 + 1.0 / leverage) / (1.0 + maintenance_margin_rate)),
             _ => None,
         }
     } else {
