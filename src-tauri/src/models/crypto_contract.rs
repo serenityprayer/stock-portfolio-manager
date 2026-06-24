@@ -57,21 +57,18 @@ impl CryptoContract {
         created_at: String,
         updated_at: String,
     ) -> Self {
-        // 估算强平价格（仅 crypto 合约类型）
+        // 估算强平价格
         // - crypto: 交易所维持保证金率约 0.5%
-        // - tradfi: 美股无"强平价格"概念，只有 margin call，直接返回 None
+        // - tradfi 做多: 美股无"强平价格"概念，不计算
+        // - tradfi 做空: 同 crypto 逻辑
         //
-        // 推导（做多）: 入场价 P, 杠杆 L, 维持保证金率 m
-        //   初始保证金 = P/L, 强平价 X 时亏损 = P-X
-        //   剩余权益 = P/L - (P-X) = X + P/L - P
-        //   维持保证金要求 = m × X
-        //   联立: X + P/L - P = mX → X(1-m) = P(L-1)/L → X = P(L-1)/(L(1-m))
-        //
-        // 推导（做空）:
-        //   剩余权益 = P/L - (X-P) = P/L + P - X
-        //   P/L + P - X = mX → X(1+m) = P(L+1)/L → X = P(L+1)/(L(1+m))
-        let liquidation_price = if leverage > 0.0 && asset_type == "crypto" {
-            let maintenance_margin_rate = 0.005;
+        // 推导（做多/做空）见 commands/crypto_contract.rs
+        let liquidation_price = if leverage > 0.0 && !(asset_type == "tradfi" && position_type == "long") {
+            let maintenance_margin_rate = if asset_type == "tradfi" {
+                0.005  // 做空 tradfi 同 crypto 维持保证金率
+            } else {
+                0.005
+            };
             match position_type.as_str() {
                 "long" => Some(open_price * (1.0 - 1.0 / leverage) / (1.0 - maintenance_margin_rate)),
                 "short" => Some(open_price * (1.0 + 1.0 / leverage) / (1.0 + maintenance_margin_rate)),

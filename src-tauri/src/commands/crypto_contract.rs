@@ -62,9 +62,8 @@ pub fn create_crypto_contract(
     )
     .map_err(|e| e.to_string())?;
 
-    // 强平价格仅 crypto 类型计算
-    // 推导见 models/crypto_contract.rs
-    let liquidation_price = if leverage > 0.0 && asset_type == "crypto" {
+    // 强平价格: crypto + tradfi做空均计算，tradfi做多不计算
+    let liquidation_price = if leverage > 0.0 && !(asset_type == "tradfi" && position_type == "long") {
         let maintenance_margin_rate = 0.005;
         match position_type.as_str() {
             "long" => Some(open_price * (1.0 - 1.0 / leverage) / (1.0 - maintenance_margin_rate)),
@@ -153,7 +152,7 @@ pub fn update_crypto_contract(
     )
     .map_err(|e| e.to_string())?;
 
-    let liquidation_price = if leverage > 0.0 && asset_type == "crypto" {
+    let liquidation_price = if leverage > 0.0 && !(asset_type == "tradfi" && position_type == "long") {
         let maintenance_margin_rate = 0.005;
         match position_type.as_str() {
             "long" => Some(open_price * (1.0 - 1.0 / leverage) / (1.0 - maintenance_margin_rate)),
