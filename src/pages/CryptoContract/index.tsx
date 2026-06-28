@@ -462,6 +462,23 @@ export default function CryptoContractPage() {
             label: `持仓中 (${contracts.length})`,
             children: (
               <div>
+                {/* 页面标题和添加按钮 */}
+                <div className="flex justify-between items-center mb-4">
+                  <Title level={2} className="!mb-0">⚡ 合约持仓</Title>
+                  <Button
+                    type="primary"
+                    icon={<PlusOutlined />}
+                    onClick={() => {
+                      setEditingContract(null);
+                      form.resetFields();
+                      form.setFieldsValue({ asset_type: "crypto", position_type: "long", leverage: 10 });
+                      setModalOpen(true);
+                    }}
+                  >
+                    添加合约
+                  </Button>
+                </div>
+
                 {/* 真实合约持仓统计 */}
                 <div className="grid grid-cols-3 gap-4 mb-4">
                   <div className="bg-white p-4 rounded shadow">
@@ -481,22 +498,6 @@ export default function CryptoContractPage() {
                 </div>
 
                 {/* 真实合约持仓表格 */}
-                <div className="mb-2 flex items-center gap-2">
-                  <Title level={4} className="!mb-0">⚡ 合约持仓</Title>
-                  <Button
-                    type="primary"
-                    size="small"
-                    icon={<PlusOutlined />}
-                    onClick={() => {
-                      setEditingContract(null);
-                      form.resetFields();
-                      form.setFieldsValue({ asset_type: "crypto", position_type: "long", leverage: 10 });
-                      setModalOpen(true);
-                    }}
-                  >
-                    添加合约
-                  </Button>
-                </div>
                 <Table
                   className="crypto-contract-table"
                   dataSource={realContracts}
@@ -511,7 +512,7 @@ export default function CryptoContractPage() {
                 {spotLikeContracts.length > 0 && (
                   <div className="mt-8">
                     <div className="mb-2">
-                      <Title level={4} className="!mb-0">📦 类现货持仓（1x 做多）</Title>
+                      <Title level={5} className="!mb-0">📦 类现货持仓</Title>
                     </div>
                     <Table
                       className="crypto-contract-table"
@@ -528,21 +529,10 @@ export default function CryptoContractPage() {
                   </div>
                 )}
 
-                {/* 若无任何持仓时显示的添加按钮 */}
+                {/* 若无任何持仓时显示的提示 */}
                 {realContracts.length === 0 && spotLikeContracts.length === 0 && (
                   <div className="text-center py-8">
-                    <Button
-                      type="primary"
-                      icon={<PlusOutlined />}
-                      onClick={() => {
-                        setEditingContract(null);
-                        form.resetFields();
-                        form.setFieldsValue({ asset_type: "crypto", position_type: "long", leverage: 10 });
-                        setModalOpen(true);
-                      }}
-                    >
-                      添加合约
-                    </Button>
+                    <Text type="secondary">暂无持仓，点击上方"添加合约"按钮开始</Text>
                   </div>
                 )}
               </div>
