@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import {
   Typography,
   Button,
@@ -10,10 +10,12 @@ import {
   Input,
   Popconfirm,
   message,
+  Tag,
 } from "antd";
 import { PlusOutlined, DeleteOutlined, EditOutlined } from "@ant-design/icons";
 import { useCryptoSpotStore } from "../../stores/cryptoSpotStore";
-import type { CryptoSpot } from "../../types";
+import { useCryptoContractStore } from "../../stores/cryptoContractStore";
+import type { CryptoSpot, CryptoContract } from "../../types";
 import { invoke } from "@tauri-apps/api/core";
 
 const { Title, Text } = Typography;
@@ -28,16 +30,41 @@ export default function CryptoSpotPage() {
     deleteCryptoSpot,
   } = useCryptoSpotStore();
 
+  const { contracts: allContracts, fetchQuotes: fetchContractQuotes } = useCryptoContractStore();
+
   const [modalOpen, setModalOpen] = useState(false);
   const [editingSpot, setEditingSpot] = useState<CryptoSpot | null>(null);
   const [form] = Form.useForm();
   const [quotes, setQuotes] = useState<Record<string, { price: number }>>({});
+  const [contractQuotes, setContractQuotes] = useState<Record<string, { price: number; change: number; changePercent: number }>>({});
 
   useEffect(() => {
     fetchCryptoSpots();
   }, [fetchCryptoSpots]);
 
-  // 拉取行情
+  // 类现货合约：1x 杠杆做多
+  const spotLikeContracts = useMemo(
+    () => allContracts.filter((c) => c.leverage === 1 && c.position_type === "long"),
+    [allContracts],
+  );
+
+  // 为类现货合约拉取行情
+  useEffect(() => {
+    if (spotLikeContracts.length === 0) return;
+    const loadContractQuotes = async () => {
+      try {
+        const data = await fetchContractQuotes();
+        setContractQuotes(data);
+      } catch (err) {
+        console.error("[CryptoSpot] 获取类现货合约行情失败:", err);
+      }
+    };
+    loadContractQuotes();
+    const timer = setInterval(loadContractQuotes, 30000);
+    return () => clearInterval(timer);
+  }, [spotLikeContracts]);
+
+  // 拉取现货行情
   useEffect(() => {
     if (cryptoSpots.length === 0) return;
     const symbols = cryptoSpots.map((s) => s.symbol).join(",");
@@ -207,6 +234,80 @@ export default function CryptoSpotPage() {
     },
   ];
 
+  // 类现货合约（1x 做多）表格列
+  const spotLikeColumns = [
+    {
+      title: "标的",
+      dataIndex: "symbol",
+      key: "symbol",
+      render: (symbol: string, record: CryptoContract) => (
+        <Space>
+          <Tag color="green">1x 现货</Tag>
+          <Tag color={record.asset_type === "crypto" ? "blue" : "purple"}>
+            {record.asset_type === "crypto" ? "加密" : "TradFi"}
+          </Tag>
+          <Text strong>{symbol}</Text>
+          {record.name && <Text type="secondary">{record.name}</Text>}
+        </Space>
+      ),
+    },
+    {
+      title: "开仓价",
+      dataIndex: "open_price",
+      key: "open_price",
+      render: (v: number) => `$${v.toFixed(2)}`,
+    },
+    {
+      title: "现价",
+      key: "current_price",
+      render: (_: unknown, record: CryptoContract) =>
+        contractQuotes[record.symbol]
+          ? `$${contractQuotes[record.symbol].price.toFixed(2)}`
+          : "-",
+    },
+    {
+      title: "数量",
+      dataIndex: "shares",
+      key: "shares",
+      render: (v: number) => v.toFixed(4),
+    },
+    {
+      title: "市值",
+      key: "market_value",
+      render: (_: unknown, record: CryptoContract) =>
+        contractQuotes[record.symbol]
+          ? `$${(contractQuotes[record.symbol].price * record.shares).toFixed(2)}`
+          : "-",
+    },
+    {
+      title: "未实现盈亏",
+      key: "pnl",
+      render: (_: unknown, record: CryptoContract) => {
+        const q = contractQuotes[record.symbol];
+        if (!q) return "-";
+        const pnl = (q.price - record.open_price) * record.shares;
+        const color = pnl >= 0 ? "#E53935" : "#43A047";
+        return <Text style={{ color, fontWeight: 500 }}>{pnl >= 0 ? "+" : ""}{pnl.toFixed(2)}</Text>;
+      },
+    },
+    {
+      title: "盈亏%",
+      key: "pnl_pct",
+      render: (_: unknown, record: CryptoContract) => {
+        const q = contractQuotes[record.symbol];
+        if (!q) return "-";
+        const pnlPct = ((q.price - record.open_price) / record.open_price) * 100;
+        const color = pnlPct >= 0 ? "#E53935" : "#43A047";
+        return <Text style={{ color, fontWeight: 500 }}>{pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(2)}%</Text>;
+      },
+    },
+    {
+      title: "交易所",
+      dataIndex: "exchange",
+      key: "exchange",
+    },
+  ];
+
   // 统计
   const totalMarketValue = cryptoSpots.reduce((sum, s) => {
     const q = quotes[s.symbol];
@@ -257,6 +358,22 @@ export default function CryptoSpotPage() {
         loading={loading}
         pagination={false}
       />
+
+      {/* 类现货持仓（1x 做多合约） */}
+      {spotLikeContracts.length > 0 && (
+        <div className="mt-8">
+          <div className="mb-2">
+            <Title level={4} className="!mb-0">📦 类现货持仓（1x 做多合约）</Title>
+          </div>
+          <Table
+            dataSource={spotLikeContracts}
+            columns={spotLikeColumns}
+            rowKey="id"
+            pagination={false}
+            className="crypto-contract-table"
+          />
+        </div>
+      )}
 
       <Modal
         title={editingSpot ? "编辑现货" : "添加现货"}

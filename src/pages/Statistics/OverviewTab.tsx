@@ -50,7 +50,7 @@ export default function OverviewTab({ overview, loading, baseCurrency }: Props) 
         <Col xs={24} sm={8}>
           <Card>
             <Statistic
-              title={}
+              title={`总市值 (${baseCurrency})`}
               value={overview.total_market_value.toFixed(2)}
               prefix={symbol}
             />
@@ -59,7 +59,7 @@ export default function OverviewTab({ overview, loading, baseCurrency }: Props) 
         <Col xs={24} sm={8}>
           <Card>
             <Statistic
-              title={}
+              title={`总成本 (${baseCurrency})`}
               value={overview.total_cost.toFixed(2)}
               prefix={symbol}
             />
@@ -68,11 +68,11 @@ export default function OverviewTab({ overview, loading, baseCurrency }: Props) 
         <Col xs={24} sm={8}>
           <Card>
             <Statistic
-              title={}
-              value={}
+              title={`总盈亏 (${baseCurrency})`}
+              value={`${totalPnlPos ? "+" : ""}${overview.total_pnl.toFixed(2)}`}
               valueStyle={{ color: pnlColor(overview.total_pnl) }}
               prefix={symbol}
-              suffix={}
+              suffix={`(${totalPnlPos ? "+" : ""}${overview.total_pnl_percent.toFixed(2)}%)`}
             />
           </Card>
         </Col>
