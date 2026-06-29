@@ -359,11 +359,11 @@ export default function CryptoSpotPage() {
         pagination={false}
       />
 
-      {/* 类现货持仓（1x 做多合约） */}
+      {/* 类现货持仓 */}
       {spotLikeContracts.length > 0 && (
         <div className="mt-8">
           <div className="mb-2">
-            <Title level={4} className="!mb-0">📦 类现货持仓（1x 做多合约）</Title>
+            <Title level={5} className="!mb-0">📦 类现货持仓</Title>
           </div>
           <Table
             dataSource={spotLikeContracts}
