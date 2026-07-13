@@ -28,6 +28,7 @@ import {
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
 import { useCryptoContractStore } from "../../stores/cryptoContractStore";
+import ContractPerformanceTab from "./ContractPerformanceTab";
 import type { CryptoContract, ContractHistory } from "../../types";
 
 const { Title, Text } = Typography;
@@ -300,6 +301,19 @@ export default function CryptoContractPage() {
           : "-",
     },
     {
+      title: "实时涨跌幅",
+      key: "change_percent",
+      sorter: (a: CryptoContract, b: CryptoContract) =>
+        (quotes[a.symbol]?.changePercent ?? 0) - (quotes[b.symbol]?.changePercent ?? 0),
+      render: (_: unknown, record: CryptoContract) => {
+        const q = quotes[record.symbol];
+        if (!q || q.changePercent === null || q.changePercent === undefined) return "-";
+        const cp = q.changePercent;
+        const color = cp >= 0 ? "#E53935" : "#43A047";
+        return <Text style={{ color, fontWeight: 500 }}>{cp >= 0 ? "+" : ""}{cp.toFixed(2)}%</Text>;
+      },
+    },
+    {
       title: "数量",
       dataIndex: "shares",
       key: "shares",
@@ -440,7 +454,7 @@ export default function CryptoContractPage() {
     [contracts],
   );
 
-  const totalMargin = realContracts.reduce((sum, c) => sum + c.margin, 0);
+  const totalMargin = [...realContracts, ...spotLikeContracts].reduce((sum, c) => sum + c.margin, 0);
   const totalPnl = [...realContracts, ...spotLikeContracts].reduce((sum, c) => {
     const q = quotes[c.symbol];
     if (!q) return sum;
@@ -723,6 +737,11 @@ export default function CryptoContractPage() {
                 />
               </div>
             ),
+          },
+          {
+            key: "performance",
+            label: "📈 收益曲线",
+            children: <ContractPerformanceTab />,
           },
         ]}
       />

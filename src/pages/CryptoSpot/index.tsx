@@ -266,6 +266,17 @@ export default function CryptoSpotPage() {
           : "-",
     },
     {
+      title: "实时涨跌幅",
+      key: "change_percent",
+      render: (_: unknown, record: CryptoContract) => {
+        const q = contractQuotes[record.symbol];
+        if (!q || q.changePercent === null || q.changePercent === undefined) return "-";
+        const cp = q.changePercent;
+        const color = cp >= 0 ? "#E53935" : "#43A047";
+        return <Text style={{ color, fontWeight: 500 }}>{cp >= 0 ? "+" : ""}{cp.toFixed(2)}%</Text>;
+      },
+    },
+    {
       title: "数量",
       dataIndex: "shares",
       key: "shares",
