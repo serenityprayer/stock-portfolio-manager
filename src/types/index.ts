@@ -772,3 +772,28 @@ export interface PortfolioValuation {
   holdings: HoldingValuation[];
 }
 
+
+// --- Contract Performance ---
+
+export interface ContractReturnPoint {
+  date: string;
+  net_value: number;
+  total_margin: number;
+  unrealized_pnl: number;
+  realized_pnl: number;
+  total_pnl: number;
+  return_rate: number;
+}
+
+export interface ContractPerformanceSummary {
+  start_date: string;
+  end_date: string;
+  current_net_value: number;
+  total_margin: number;
+  total_pnl: number;
+  total_return: number;
+  max_drawdown: number;
+  volatility: number;
+  win_rate: number;
+  return_series: ContractReturnPoint[];
+}

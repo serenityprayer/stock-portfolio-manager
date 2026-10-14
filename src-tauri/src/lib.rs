@@ -260,6 +260,10 @@ pub fn run() {
             commands::crypto_contract::close_crypto_contract,
             commands::crypto_contract::add_crypto_position,
             commands::crypto_contract::list_contract_history,
+            // Contract Performance
+            commands::contract_performance::get_contract_performance_summary,
+            commands::contract_performance::get_earliest_contract_date,
+            commands::contract_performance::initialize_contract_performance,
             // Valuation
             commands::valuation::get_portfolio_valuation,
         ])

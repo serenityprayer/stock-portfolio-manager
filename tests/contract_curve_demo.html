@@ -1,0 +1,116 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>合约收益曲线对比：理想 vs 方案A</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <style>
+    body { font-family: sans-serif; padding: 20px; background: #f5f5f5; }
+    .chart-container { width: 100%; height: 450px; background: white; border-radius: 8px; padding: 16px; margin-bottom: 20px; }
+    .info { background: white; padding: 16px; border-radius: 8px; margin-bottom: 20px; }
+    .warning { background: #fff3cd; border-left: 4px solid #ffc107; padding: 12px; border-radius: 4px; margin-top: 12px; }
+    .verdict { background: #d4edda; border-left: 4px solid #28a745; padding: 12px; border-radius: 4px; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <h1>📊 合约收益曲线对比示例</h1>
+  
+  <div class="info">
+    <h3>模拟场景（3笔交易）</h3>
+    <ul>
+      <li>🟢 BTC 5x 做多：2024-01-10 开仓 @ $42,000 → 2024-03-15 平仓 @ $68,000（盈利 +$13,000）</li>
+      <li>🔵 ETH 3x 做空：2024-02-01 开仓 @ $2,200 → 2024-04-20 平仓 @ $1,800（盈利 +$4,000）</li>
+      <li>🟡 SOL 2x 做多：2024-03-01 开仓 @ $80 → 当前未平仓 @ $140（浮盈 +$6,000）</li>
+    </ul>
+  </div>
+
+  <div class="chart-container">
+    <h3>✅ 理想曲线（有历史价格数据）</h3>
+    <div id="idealChart" style="width:100%;height:380px;"></div>
+  </div>
+
+  <div class="chart-container">
+    <h3>⚠️ 方案A（只用平仓记录）</h3>
+    <div id="optionAChart" style="width:100%;height:380px;"></div>
+  </div>
+
+  <div class="info">
+    <h3>🔍 方案A 的问题分析</h3>
+    <div class="warning">
+      <b>问题1：看不到持仓期间的价格波动</b><br>
+      方案A只知道开仓和平仓两个时间点的净值，中间的价格波动（可能很大！）完全看不到。
+      比如上图中 BTC 在 2024-01 到 2024-03 之间可能有过大幅回撤，但方案A的曲线是直的。
+    </div>
+    <div class="warning" style="margin-top: 8px;">
+      <b>问题2：多个持仓叠加时，曲线失真更严重</b><br>
+      如果有5笔合约交叉开平仓，方案A的曲线会变成几段直线，完全无法反映真实净值变化。
+    </div>
+    <div class="warning" style="margin-top: 8px;">
+      <b>问题3：最大回撤无法计算</b><br>
+      最大回撤需要每日净值数据才能算。方案A因为没有每日数据，最大回撤永远是0或者严重低估。
+    </div>
+    <div class="verdict">
+      <b>结论：方案A 只能作为"交易记录汇总"，不能叫"收益曲线"。</b><br>
+      如果你只是想看"我赚了/亏了多少钱"，方案A够用。<br>
+      但如果你想分析策略表现、评估风险，必须要有历史价格数据。
+    </div>
+  </div>
+
+  <script>
+    // ---------- 理想曲线 ----------
+    const idealChart = echarts.init(document.getElementById('idealChart'));
+    const idealOption = {
+      tooltip: { trigger: 'axis' },
+      xAxis: { type: 'category', data: ["2024-01-10", "2024-01-17", "2024-01-24", "2024-01-31", "2024-02-07", "2024-02-14", "2024-02-21", "2024-02-28", "2024-03-06", "2024-03-13", "2024-03-20", "2024-03-27", "2024-04-03", "2024-04-10", "2024-04-17", "2024-04-24", "2024-05-01", "2024-05-08", "2024-05-15", "2024-05-22", "2024-05-29", "2024-06-05", "2024-06-12", "2024-06-19", "2024-06-26"] },
+      yAxis: { type: 'value', name: '净值 ($)' },
+      series: [{
+        name: '合约净值',
+        type: 'line',
+        data: [4109.22, 3377.28, 4171.67, 3845.5, 8671.75, 6322.55, 8607.0, 8023.0, 6889.32, 7052.74, 23601.8, 26636.5, 22853.5, 21761.0, 22751.7, 38805.0, 37893.0, 40355.0, 39691.0, 38816.0, 39763.0, 36449.0, 37353.0, 41749.0, 43842.0],
+        smooth: false,
+        lineStyle: { color: '#E53935', width: 2 },
+        areaStyle: { color: 'rgba(229,57,53,0.1)' },
+        itemStyle: { color: '#E53935' }
+      }]
+    };
+    idealChart.setOption(idealOption);
+
+    // ---------- 方案A曲线 ----------
+    const optionAChart = echarts.init(document.getElementById('optionAChart'));
+    // 方案A需要把阶跃数据展开成连续日期
+    const allDates = [];
+    const allValues = [];
+    let cursor = 0;
+    const startDate = new Date('2024-01-10');
+    const endDate = new Date('2024-06-30');
+    for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+      const ds = d.toISOString().slice(0,10);
+      allDates.push(ds);
+      // 找到 ds 之前最近的事件值
+      let val = 0;
+      for (let i = 0; i < [{"date": "2024-01-10", "type": "open", "value_change": 4200, "symbol": "BTC"}, {"date": "2024-02-01", "type": "open", "value_change": 7333, "symbol": "ETH"}, {"date": "2024-03-01", "type": "open", "value_change": 4000, "symbol": "SOL"}, {"date": "2024-03-15", "type": "close", "value_change": 17200.0, "symbol": "BTC"}, {"date": "2024-04-20", "type": "close", "value_change": 11333, "symbol": "ETH"}, {"date": "2024-06-30", "type": "current", "value_change": 10000, "symbol": "SOL"}].length; i++) {
+        if ([{"date": "2024-01-10", "type": "open", "value_change": 4200, "symbol": "BTC"}, {"date": "2024-02-01", "type": "open", "value_change": 7333, "symbol": "ETH"}, {"date": "2024-03-01", "type": "open", "value_change": 4000, "symbol": "SOL"}, {"date": "2024-03-15", "type": "close", "value_change": 17200.0, "symbol": "BTC"}, {"date": "2024-04-20", "type": "close", "value_change": 11333, "symbol": "ETH"}, {"date": "2024-06-30", "type": "current", "value_change": 10000, "symbol": "SOL"}][i].date <= ds) {
+          val = [{"date": "2024-01-10", "type": "open", "value_change": 4200, "symbol": "BTC"}, {"date": "2024-02-01", "type": "open", "value_change": 7333, "symbol": "ETH"}, {"date": "2024-03-01", "type": "open", "value_change": 4000, "symbol": "SOL"}, {"date": "2024-03-15", "type": "close", "value_change": 17200.0, "symbol": "BTC"}, {"date": "2024-04-20", "type": "close", "value_change": 11333, "symbol": "ETH"}, {"date": "2024-06-30", "type": "current", "value_change": 10000, "symbol": "SOL"}][i].value_change;
+        }
+      }
+      allValues.push(val);
+    }
+
+    const optionAOption = {
+      tooltip: { trigger: 'axis' },
+      xAxis: { type: 'category', data: allDates.filter((_,i) => i % 7 === 0) },
+      yAxis: { type: 'value', name: '净值 ($)' },
+      series: [{
+        name: '方案A净值（阶跃）',
+        type: 'line',
+        step: 'middle',  // 阶跃式
+        data: allValues.filter((_,i) => i % 7 === 0),
+        lineStyle: { color: '#FF9800', width: 2 },
+        itemStyle: { color: '#FF9800' }
+      }]
+    };
+    optionAChart.setOption(optionAOption);
+  </script>
+</body>
+</html>

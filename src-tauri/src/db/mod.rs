@@ -608,6 +608,19 @@ impl Database {
             );
         ")?;
 
+        // 合约收益曲线快照表（用于 ContractPerformance 页面）
+        conn.execute_batch("
+            CREATE TABLE IF NOT EXISTS daily_contract_values (
+                date            TEXT PRIMARY KEY NOT NULL,
+                net_value       REAL NOT NULL DEFAULT 0,
+                total_margin    REAL NOT NULL DEFAULT 0,
+                unrealized_pnl  REAL NOT NULL DEFAULT 0,
+                realized_pnl    REAL NOT NULL DEFAULT 0,
+                total_pnl       REAL NOT NULL DEFAULT 0,
+                return_rate     REAL NOT NULL DEFAULT 0
+            );
+        ")?;
+
         migrate_transactions_check_constraint(&conn)?;
 
         // Convert synthetic BUY records to OPEN type so they are correctly

@@ -2,6 +2,7 @@ pub mod account;
 pub mod ai_config;
 pub mod alert;
 pub mod category;
+pub mod contract_performance;
 pub mod crypto_contract;
 pub mod crypto_spot;
 pub mod dashboard;
@@ -18,6 +19,7 @@ pub mod valuation;
 
 pub use account::Account;
 pub use category::Category;
+pub use contract_performance::{ContractPerformanceSummary, ContractReturnPoint};
 pub use dashboard::{DashboardSummary, HoldingDetail};
 pub use holding::Holding;
 pub use quote::{DailyHoldingSnapshot, DailyPortfolioValue, ExchangeRates, HoldingWithQuote, StockQuote};
