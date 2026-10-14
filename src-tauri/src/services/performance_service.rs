@@ -1112,11 +1112,21 @@ pub fn get_holding_performance_ranking(
                     ),
                 });
 
-            // 期末市值：若期末已无持仓（已清仓），市值按 0 计——
-            // 仓位已变现为现金，若沿用清仓前的陈旧快照值，卖出所得会被重复计为收益。
+            // 期末市值（三种情形）：
+            // 1. 已清仓(shares=0) → 0：仓位已变现为现金，若沿用清仓前的陈旧快照值，
+            //    卖出所得会被重复计为收益。
+            // 2. 仍持仓且快照存在 → 用快照市值。
+            // 3. 仍持仓但快照缺失（如当日新建仓、快照尚未生成）→ 用持仓成本
+            //    (shares × avg_cost) 兜底；否则市值被当作 0，会把买入金额误算成亏损。
             let ev_raw = snap.map(|e| e.market_value).unwrap_or(0.0);
             let end_shares = end_shares_map.get(&symbol).copied().unwrap_or(0.0);
-            let ev = if end_shares > 1e-8 { ev_raw } else { 0.0 };
+            let ev = if end_shares <= 1e-8 {
+                0.0
+            } else if snap.is_some() {
+                ev_raw
+            } else {
+                holding_cost_map.get(&symbol).copied().unwrap_or(ev_raw)
+            };
 
             let cf = net_cash_flows.get(&symbol).copied().unwrap_or(0.0);
             let buy = buy_flows.get(&symbol).copied().unwrap_or(0.0);
