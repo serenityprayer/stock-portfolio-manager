@@ -959,7 +959,12 @@ pub fn get_holding_performance_ranking(
     let end_snaps = fetch_snap(&end_str)?;
 
     // Fetch net cash flows per symbol from transactions during the period
+    // net_cash_flows = 买入 - 卖出（买入为正现金投入，卖出为负）
+    // buy_flows = 期内累计买入金额，仅用于成本基数
+    // （净现金流会被卖出抵消，例如"买入480后清仓卖424"净额仅56，不能当作成本）
     let mut net_cash_flows: std::collections::HashMap<String, f64> =
+        std::collections::HashMap::new();
+    let mut buy_flows: std::collections::HashMap<String, f64> =
         std::collections::HashMap::new();
     {
         let actual_start_str = {
@@ -1005,13 +1010,16 @@ pub fn get_holding_performance_ranking(
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
         for (sym, tx_type, amount) in rows {
-            let flow = match tx_type.as_str() {
-                "BUY" => amount,
-                "OPEN" => amount,
-                "SELL" => -amount,
-                _ => 0.0,
-            };
-            *net_cash_flows.entry(sym).or_insert(0.0) += flow;
+            match tx_type.as_str() {
+                "BUY" | "OPEN" => {
+                    *buy_flows.entry(sym.clone()).or_insert(0.0) += amount;
+                    *net_cash_flows.entry(sym).or_insert(0.0) += amount;
+                }
+                "SELL" => {
+                    *net_cash_flows.entry(sym).or_insert(0.0) -= amount;
+                }
+                _ => {}
+            }
         }
     }
 
@@ -1038,27 +1046,94 @@ pub fn get_holding_performance_ranking(
         map
     };
 
-    let mut performances: Vec<HoldingPerformance> = end_snaps
+    // 期末实时持仓股数。holdings 表反映最新成交（清仓后 shares=0），
+    // 而日快照可能仍停留在清仓之前，因此以 holdings 为准判断是否已清仓。
+    let end_shares_map: std::collections::HashMap<String, f64> = {
+        let mut sql = String::from("SELECT symbol, SUM(shares) FROM holdings WHERE 1=1");
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        filter.append_where_clauses(&mut sql, &mut params);
+        sql.push_str(" GROUP BY symbol");
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(param_refs.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        rows.into_iter().collect()
+    };
+
+    // 期末快照按 symbol 索引
+    let end_snap_map: std::collections::HashMap<String, SnapRow> = end_snaps
         .into_iter()
-        .filter(|e| !crate::services::quote_service::is_cash_symbol(&e.symbol))
-        .map(|e| {
+        .map(|e| (e.symbol.clone(), e))
+        .collect();
+
+    // holdings 的市场信息，用于补充"已清仓、快照中已消失"标的的市场字段
+    let holding_market_map: std::collections::HashMap<String, String> = {
+        let mut stmt = conn
+            .prepare("SELECT symbol, market FROM holdings")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        rows.into_iter().collect()
+    };
+
+    // 标的集合 = 期末快照中的 ∪ 期内有成交的。
+    // 已清仓标的会从最新快照中消失，但本期已实现盈亏仍应展示。
+    let mut symbols: Vec<String> = end_snap_map.keys().cloned().collect();
+    for sym in net_cash_flows.keys() {
+        if !end_snap_map.contains_key(sym) {
+            symbols.push(sym.clone());
+        }
+    }
+
+    let mut performances: Vec<HoldingPerformance> = symbols
+        .into_iter()
+        .filter(|s| !crate::services::quote_service::is_cash_symbol(s))
+        .map(|symbol| {
+            let snap = end_snap_map.get(&symbol);
             let (market, cat, sv) = start_map
-                .get(&e.symbol)
+                .get(&symbol)
                 .cloned()
-                .unwrap_or_else(|| (e.market.clone(), e.category_name.clone(), 0.0));
-            let ev = e.market_value;
-            let cf = net_cash_flows.get(&e.symbol).copied().unwrap_or(0.0);
+                .unwrap_or_else(|| match snap {
+                    Some(e) => (e.market.clone(), e.category_name.clone(), 0.0),
+                    None => (
+                        holding_market_map.get(&symbol).cloned().unwrap_or_default(),
+                        String::from("未分类"),
+                        0.0,
+                    ),
+                });
+
+            // 期末市值：若期末已无持仓（已清仓），市值按 0 计——
+            // 仓位已变现为现金，若沿用清仓前的陈旧快照值，卖出所得会被重复计为收益。
+            let ev_raw = snap.map(|e| e.market_value).unwrap_or(0.0);
+            let end_shares = end_shares_map.get(&symbol).copied().unwrap_or(0.0);
+            let ev = if end_shares > 1e-8 { ev_raw } else { 0.0 };
+
+            let cf = net_cash_flows.get(&symbol).copied().unwrap_or(0.0);
+            let buy = buy_flows.get(&symbol).copied().unwrap_or(0.0);
 
             let (actual_sv, cost_base, pnl) = if sv > 0.0 {
-                // Had position at start: PnL = end - start - net_cash_flow
+                // 期初已持仓：PnL = 期末 - 期初 - 净现金流（买入为正、卖出为负）
+                // 成本基数 = 期初市值 + 期内累计买入
                 let p = ev - sv - cf;
-                (sv, sv + cf.max(0.0), p)
-            } else if cf > 0.0 {
-                // New position opened during period: cost = cash invested
-                (cf, cf, ev - cf)
+                (sv, sv + buy, p)
+            } else if buy > 0.0 {
+                // 期内新建仓：成本基数 = 累计买入。
+                // 不能用净现金流 cf——它已被卖出抵消（买480卖424净额仅56），会严重低估成本。
+                let p = ev - cf;
+                (buy, buy, p)
             } else {
-                // Position existed before period, no start snapshot
-                let cost = holding_cost_map.get(&e.symbol).copied().unwrap_or(ev);
+                // 期初无快照且期内无买入：用持仓成本兜底
+                let cost = holding_cost_map.get(&symbol).copied().unwrap_or(ev);
                 (cost, cost, ev - cost)
             };
 
@@ -1068,7 +1143,7 @@ pub fn get_holding_performance_ranking(
                 0.0
             };
             HoldingPerformance {
-                symbol: e.symbol,
+                symbol,
                 name: String::new(),
                 market,
                 category_name: cat,
