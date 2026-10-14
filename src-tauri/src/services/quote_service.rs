@@ -1384,6 +1384,11 @@ pub async fn fetch_stock_history_yahoo(
 
     let resp = http_client::general_client()
         .get(&url)
+        .header("Accept", "*/*")
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .header("Accept-Encoding", "gzip, deflate, br")
+        .header("Origin", "https://finance.yahoo.com")
+        .header("Referer", "https://finance.yahoo.com")
         .send()
         .await
         .map_err(|e| format!("fetch_stock_history_yahoo: network error for {}: {}", yahoo_sym, e))?;
