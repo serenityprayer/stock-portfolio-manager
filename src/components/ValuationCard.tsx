@@ -1,7 +1,7 @@
 import React from "react";
 import { Card, Statistic, Row, Col, Tooltip, Table, Tag } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import type { PortfolioValuation } from "../../types";
+import type { PortfolioValuation } from "../types";
 
 interface Props {
   valuation: PortfolioValuation | null;
@@ -65,7 +65,7 @@ const ValuationCard: React.FC<Props> = ({ valuation, loading }) => {
 export const ValuationTable: React.FC<Props> = ({ valuation, loading }) => {
   if (!valuation) return null;
 
-  const dataSource = valuation.holdings.map((h, i) => ({
+  const dataSource = valuation.holdings.map((h) => ({
     ...h,
     key: h.symbol,
   }));

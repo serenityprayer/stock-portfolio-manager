@@ -513,7 +513,7 @@ struct EastMoneyResponse {
 /// All numeric fields use `f64` so they can accept both JSON integers and
 /// JSON floats (e.g. `30279` and `30279.0`) — serde rejects JSON floats
 /// when deserializing as `u64`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 struct EastMoneyData {
     /// Current price
     f43: Option<f64>,
@@ -997,7 +997,7 @@ struct XueqiuData {
 }
 
 /// Xueqiu quote fields.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 struct XueqiuQuote {
     /// Stock name (e.g. "贵州茅台", "Apple Inc.")
     name: Option<String>,
@@ -1747,6 +1747,7 @@ mod tests {
                 f60: Some(prev_close),
                 f169: Some(change),
                 f170: Some(change_pct),
+                ..Default::default()
             }),
         }
     }
@@ -1800,6 +1801,7 @@ mod tests {
                 f60: Some(1690.00),
                 f169: Some(20.50),
                 f170: Some(1.21),
+                ..Default::default()
             }),
         };
         let result = parse_eastmoney_quote("sh600519", "CN", resp);
@@ -1971,6 +1973,7 @@ mod tests {
                 f60: Some(1000.00),
                 f169: None,
                 f170: None,
+                ..Default::default()
             }),
         };
         let result = parse_eastmoney_quote("sh600519", "CN", resp);
@@ -2139,6 +2142,7 @@ mod tests {
             low: 94.0,
             volume: 1000000,
             updated_at: Utc::now().to_rfc3339(),
+            ..Default::default()
         }
     }
 
@@ -2602,7 +2606,7 @@ mod tests {
     // ---- Xueqiu response parsing tests ----
 
     fn make_xueqiu_response(
-        symbol: &str,
+        _symbol: &str,
         name: &str,
         current: f64,
         last_close: f64,
@@ -2615,7 +2619,6 @@ mod tests {
         XueqiuResponse {
             data: Some(XueqiuData {
                 quote: Some(XueqiuQuote {
-                    symbol: Some(symbol.to_string()),
                     name: Some(name.to_string()),
                     current: Some(current),
                     last_close: Some(last_close),
@@ -2624,6 +2627,7 @@ mod tests {
                     high: Some(high),
                     low: Some(low),
                     volume: Some(volume),
+                    ..Default::default()
                 }),
             }),
             error_code: Some(0),
@@ -2730,7 +2734,6 @@ mod tests {
         let resp = XueqiuResponse {
             data: Some(XueqiuData {
                 quote: Some(XueqiuQuote {
-                    symbol: Some("SH600519".to_string()),
                     name: Some("贵州茅台".to_string()),
                     current: None,
                     last_close: Some(1690.00),
@@ -2739,6 +2742,7 @@ mod tests {
                     high: Some(1720.00),
                     low: Some(1685.00),
                     volume: Some(12345.0),
+                    ..Default::default()
                 }),
             }),
             error_code: Some(0),
@@ -2766,7 +2770,6 @@ mod tests {
         let resp = XueqiuResponse {
             data: Some(XueqiuData {
                 quote: Some(XueqiuQuote {
-                    symbol: Some("SH600519".to_string()),
                     name: Some("贵州茅台".to_string()),
                     current: Some(1100.00),
                     last_close: Some(1000.00),
@@ -2775,6 +2778,7 @@ mod tests {
                     high: Some(1200.00),
                     low: Some(950.00),
                     volume: Some(99999.0),
+                    ..Default::default()
                 }),
             }),
             error_code: Some(0),

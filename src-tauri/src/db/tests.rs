@@ -205,6 +205,7 @@ mod tests {
             cn_provider: "eastmoney".to_string(),
             xueqiu_cookie: None,
             xueqiu_u: None,
+            ..Default::default()
         };
         let result = crate::services::quote_provider_service::update_quote_provider_config(&db, &config);
         assert!(result.is_ok());
@@ -224,6 +225,7 @@ mod tests {
             cn_provider: "eastmoney".to_string(),
             xueqiu_cookie: None,
             xueqiu_u: None,
+            ..Default::default()
         };
         let result = crate::services::quote_provider_service::update_quote_provider_config(&db, &config);
         assert!(result.is_err());
@@ -238,6 +240,7 @@ mod tests {
             cn_provider: "yahoo".to_string(),
             xueqiu_cookie: None,
             xueqiu_u: None,
+            ..Default::default()
         };
         let result = crate::services::quote_provider_service::update_quote_provider_config(&db, &config);
         assert!(result.is_err());
@@ -252,6 +255,7 @@ mod tests {
             cn_provider: "eastmoney".to_string(),
             xueqiu_cookie: Some("xq_a_token=abc123".to_string()),
             xueqiu_u: None,
+            ..Default::default()
         };
         let result = crate::services::quote_provider_service::update_quote_provider_config(&db, &config);
         assert!(result.is_ok());
@@ -269,6 +273,7 @@ mod tests {
             cn_provider: "eastmoney".to_string(),
             xueqiu_cookie: None,
             xueqiu_u: Some("9095890697".to_string()),
+            ..Default::default()
         };
         let result = crate::services::quote_provider_service::update_quote_provider_config(&db, &config);
         assert!(result.is_ok());
@@ -286,6 +291,7 @@ mod tests {
             cn_provider: "eastmoney".to_string(),
             xueqiu_cookie: None,
             xueqiu_u: Some("   ".to_string()),
+            ..Default::default()
         };
         let result = crate::services::quote_provider_service::update_quote_provider_config(&db, &config);
         assert!(result.is_ok());
@@ -324,6 +330,7 @@ mod tests {
                 low: 173.0,
                 volume: 50000000,
                 updated_at: "2024-01-15T16:00:00Z".to_string(),
+                ..Default::default()
             },
             crate::models::StockQuote {
                 symbol: "sh600519".to_string(),
@@ -337,6 +344,7 @@ mod tests {
                 low: 1785.0,
                 volume: 3000000,
                 updated_at: "2024-01-15T15:00:00Z".to_string(),
+                ..Default::default()
             },
         ];
 
@@ -371,6 +379,7 @@ mod tests {
             low: 173.0,
             volume: 50000000,
             updated_at: "2024-01-15T16:00:00Z".to_string(),
+            ..Default::default()
         };
         crate::services::quote_service::save_quotes_to_db(&db, &[quote]).unwrap();
 
@@ -387,6 +396,7 @@ mod tests {
             low: 175.0,
             volume: 60000000,
             updated_at: "2024-01-16T16:00:00Z".to_string(),
+            ..Default::default()
         };
         crate::services::quote_service::save_quotes_to_db(&db, &[updated_quote]).unwrap();
 
