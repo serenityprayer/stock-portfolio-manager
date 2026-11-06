@@ -435,6 +435,9 @@ pub fn recalibrate_hwm(db: &Database, reason: &str) -> Result<HwmState, String> 
         params![HWM_SCOPE, ctx.total_assets_base, now],
     )
     .map_err(|e| e.to_string())?;
+    // NOTE: ?5 is intentionally reused for first/last/resolved_at. The number of
+    // params! entries must equal the LARGEST placeholder index (5 here), not the
+    // number of columns. Do not append another `now` — see tests/check_sql_bindings.py.
     tx.execute(
         "INSERT INTO risk_events
          (id, rule_id, symbol, account_id, severity, status, metric_value, threshold,
@@ -446,7 +449,6 @@ pub fn recalibrate_hwm(db: &Database, reason: &str) -> Result<HwmState, String> 
             ctx.total_assets_base,
             format!("HWM 校准：{}", reason.trim()),
             json!({ "total_assets_base": ctx.total_assets_base }).to_string(),
-            now,
             now
         ],
     )
@@ -536,6 +538,8 @@ fn sync_events(conn: &Connection, findings: &[RiskFinding]) -> Result<Vec<RiskEv
                 .map_err(|e| e.to_string())?;
             }
         } else {
+            // NOTE: ?9 is intentionally reused for first/last_triggered_at.
+            // params! must contain exactly 9 entries (the largest placeholder index).
             conn.execute(
                 "INSERT INTO risk_events
                  (id, rule_id, symbol, account_id, severity, status, metric_value, threshold,
@@ -550,7 +554,6 @@ fn sync_events(conn: &Connection, findings: &[RiskFinding]) -> Result<Vec<RiskEv
                     f.threshold,
                     f.message,
                     context,
-                    now,
                     now
                 ],
             )
