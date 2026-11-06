@@ -4,6 +4,8 @@ import {
   Button,
   Card,
   DatePicker,
+  Descriptions,
+  Empty,
   Input,
   InputNumber,
   Modal,
@@ -15,6 +17,7 @@ import {
   Table,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from "antd";
@@ -23,10 +26,14 @@ import dayjs from "dayjs";
 import { invoke } from "@tauri-apps/api/core";
 import { useRiskStore } from "../../stores/riskStore";
 import type {
+  DueReview,
   ExternalCashFlow,
+  InvestmentMemo,
   RiskEvent,
   RiskRuleConfig,
   RiskSeverity,
+  RoundTrip,
+  StressOverride,
   WatchItem,
 } from "../../types";
 
@@ -117,6 +124,32 @@ export default function RiskPage() {
     addWatchItem,
     removeWatchItem,
     fetchStats,
+    roundTrips,
+    tripStats,
+    dueReviews,
+    disciplineScore,
+    memos,
+    memoComparison,
+    analysis,
+    advisorReply,
+    aiBusy,
+    stressResult,
+    contractRisks,
+    quality,
+    fetchRoundTrips,
+    fetchDueReviews,
+    backfillCapsules,
+    completeReview,
+    fetchDisciplineScore,
+    fetchMemos,
+    createMemo,
+    deleteMemo,
+    compareMemo,
+    analyzeTrade,
+    askAdvisor,
+    stressTest,
+    fetchContractRisk,
+    fetchQuality,
   } = useRiskStore();
 
   const [accounts, setAccounts] = useState<Array<{ id: string; name: string }>>([]);
@@ -139,6 +172,16 @@ export default function RiskPage() {
     occurredAt: dayjs().format("YYYY-MM-DD"),
     note: "",
   });
+  const [reviewTarget, setReviewTarget] = useState<DueReview | null>(null);
+  const [reviewQuality, setReviewQuality] = useState("correct");
+  const [reviewContent, setReviewContent] = useState("");
+  const [memoOpen, setMemoOpen] = useState(false);
+  const [memoForm, setMemoForm] = useState({ title: "", content: "", tags: "" });
+  const [stressGlobal, setStressGlobal] = useState<number>(-10);
+  const [stressSymbol, setStressSymbol] = useState("");
+  const [stressSymbolPct, setStressSymbolPct] = useState<number>(-30);
+  const [aiMessage, setAiMessage] = useState("");
+  const [aiTxId, setAiTxId] = useState("");
 
   useEffect(() => {
     fetchDashboard();
@@ -146,6 +189,10 @@ export default function RiskPage() {
     fetchHwm();
     fetchWatchlist();
     fetchStats();
+    fetchRoundTrips();
+    fetchDueReviews();
+    fetchDisciplineScore();
+    fetchMemos();
     invoke<Array<{ id: string; name: string }>>("get_accounts")
       .then((list) => {
         setAccounts(list);
@@ -354,6 +401,169 @@ export default function RiskPage() {
       ),
     },
   ];
+
+  const tripColumns = [
+    { title: "标的", dataIndex: "symbol", key: "symbol", width: 90 },
+    { title: "建仓", dataIndex: "open_at", key: "open_at", width: 105, render: (v: string) => v.slice(0, 10) },
+    { title: "平仓", dataIndex: "close_at", key: "close_at", width: 105, render: (v: string) => v.slice(0, 10) },
+    { title: "持有", key: "holding_days", width: 75, render: (_: unknown, r: RoundTrip) => `${r.holding_days} 天` },
+    { title: "数量", dataIndex: "qty", key: "qty", width: 80, render: (v: number) => v.toFixed(2) },
+    {
+      title: "开/平均价",
+      key: "prices",
+      width: 140,
+      render: (_: unknown, r: RoundTrip) => `${r.avg_open_price.toFixed(2)} → ${r.avg_close_price.toFixed(2)}`,
+    },
+    {
+      title: "已结盈亏",
+      key: "pnl",
+      width: 120,
+      render: (_: unknown, r: RoundTrip) => (
+        <span style={{ color: pctColor(r.realized_pnl), fontWeight: 500 }}>
+          {r.realized_pnl >= 0 ? "+" : ""}{r.realized_pnl.toFixed(2)} ({r.return_rate >= 0 ? "+" : ""}{r.return_rate.toFixed(1)}%)
+        </span>
+      ),
+    },
+    {
+      title: "当初理由",
+      key: "note",
+      render: (_: unknown, r: RoundTrip) => (
+        <Tooltip title={r.open_note ?? ""}>
+          <Text type="secondary" style={{ fontSize: 12 }}>{r.open_note ?? "—"}</Text>
+        </Tooltip>
+      ),
+    },
+    {
+      title: "",
+      key: "split",
+      width: 70,
+      render: (_: unknown, r: RoundTrip) => r.split_lots ? <Tag color="blue">跨批次</Tag> : null,
+    },
+  ];
+
+  const reviewColumns = [
+    {
+      title: "标的",
+      key: "symbol",
+      width: 100,
+      render: (_: unknown, r: DueReview) => (
+        <div>
+          <strong>{r.symbol}</strong>
+          {r.is_priority && <Tag color="red" style={{ marginLeft: 6 }}>破例</Tag>}
+        </div>
+      ),
+    },
+    { title: "成交日", dataIndex: "traded_at", key: "traded_at", width: 105, render: (v: string | null) => v?.slice(0, 10) ?? "—" },
+    { title: "到期", dataIndex: "due_at", key: "due_at", width: 105, render: (v: string | null) => v?.slice(0, 10) ?? "—" },
+    {
+      title: "状态",
+      key: "status",
+      width: 105,
+      render: (_: unknown, r: DueReview) => r.completed_at
+        ? <Tag color="success">已复盘 {r.decision_quality === "correct" ? "✓" : r.decision_quality === "wrong" ? "✗" : ""}</Tag>
+        : <Tag color={r.days_overdue > 0 ? "orange" : "default"}>{r.days_overdue > 0 ? `逾期 ${r.days_overdue} 天` : "待到期"}</Tag>,
+    },
+    {
+      title: "当初怎么想",
+      key: "thesis",
+      render: (_: unknown, r: DueReview) => (
+        <div style={{ fontSize: 12 }}>
+          <div>{r.open_note ?? <Text type="secondary">未记录买入理由</Text>}</div>
+          {r.override_reason && <div style={{ color: RED }}>破例理由：{r.override_reason}</div>}
+        </div>
+      ),
+    },
+    {
+      title: "",
+      key: "action",
+      width: 90,
+      render: (_: unknown, r: DueReview) => (
+        <Button
+          size="small"
+          type="link"
+          disabled={!!r.completed_at}
+          onClick={() => {
+            setReviewTarget(r);
+            setReviewQuality("correct");
+            setReviewContent(r.content ?? "");
+          }}
+        >
+          {r.completed_at ? "已完成" : "回填复盘"}
+        </Button>
+      ),
+    },
+  ];
+
+  const memoColumns = [
+    { title: "标题", dataIndex: "title", key: "title", width: 220 },
+    { title: "标签", dataIndex: "tags", key: "tags", width: 140, render: (v: string | null) => v ?? "—" },
+    { title: "创建", dataIndex: "created_at", key: "created_at", width: 140, render: (v: string) => fmtTime(v) },
+    {
+      title: "",
+      key: "action",
+      width: 140,
+      render: (_: unknown, r: InvestmentMemo) => (
+        <div className="flex gap-1">
+          <Button size="small" type="link" onClick={() => compareMemo(r.id)}>对照现在</Button>
+          <Popconfirm title="删除这篇笔记？" onConfirm={() => deleteMemo(r.id)} okText="删除" cancelText="取消">
+            <Button size="small" type="link" danger>删除</Button>
+          </Popconfirm>
+        </div>
+      ),
+    },
+  ];
+
+  const stressColumns = [
+    { title: "标的", dataIndex: "symbol", key: "symbol", width: 110 },
+    { title: "原价", dataIndex: "old_price", key: "old_price", width: 100, render: (v: number) => v.toFixed(2) },
+    { title: "假设价", dataIndex: "new_price", key: "new_price", width: 100, render: (v: number) => v.toFixed(2) },
+    {
+      title: "市值变化",
+      key: "delta",
+      render: (_: unknown, r: { old_value: number; new_value: number }) => (
+        <span style={{ color: pctColor(r.new_value - r.old_value) }}>
+          {r.old_value.toFixed(2)} → {r.new_value.toFixed(2)}
+        </span>
+      ),
+    },
+  ];
+
+  const contractColumns = [
+    { title: "标的", dataIndex: "symbol", key: "symbol", width: 100 },
+    { title: "方向", dataIndex: "position_type", key: "position_type", width: 80, render: (v: string) => v === "long" ? "多" : "空" },
+    { title: "杠杆", dataIndex: "leverage", key: "leverage", width: 80, render: (v: number) => `${v}x` },
+    { title: "开仓价", dataIndex: "open_price", key: "open_price", width: 100, render: (v: number) => v.toFixed(2) },
+    { title: "现价", dataIndex: "current_price", key: "current_price", width: 100, render: (v: number) => v > 0 ? v.toFixed(2) : "—" },
+    { title: "预估强平价", dataIndex: "liquidation_price", key: "liquidation_price", width: 110, render: (v: number) => v.toFixed(2) },
+    {
+      title: "强平距离",
+      key: "distance",
+      width: 110,
+      render: (_: unknown, r: { distance_percent: number; severity: RiskSeverity }) => (
+        <Tag color={SEVERITY[r.severity]?.color ?? "default"}>{r.distance_percent.toFixed(1)}%</Tag>
+      ),
+    },
+    { title: "说明", dataIndex: "message", key: "message" },
+  ];
+
+  // 后端约定 symbol="*" 表示全部非现金持仓；单标的 override 可叠加覆盖。
+  const runStress = async () => {
+    const overrides: StressOverride[] = [];
+    if (stressGlobal) {
+      overrides.push({ symbol: "*", price_change_percent: stressGlobal });
+    }
+    if (stressSymbol.trim()) {
+      overrides.push({
+        symbol: stressSymbol.trim().toUpperCase(),
+        price_change_percent: stressSymbolPct,
+      });
+    }
+    if (!overrides.length) {
+      message.warning("请设置至少一个价格冲击");
+      return;
+    }
+    await stressTest(overrides);
+  };
 
   const submitWatch = async () => {
     if (!watchForm.symbol.trim()) {
@@ -635,6 +845,226 @@ export default function RiskPage() {
                 </div>
               ),
             },
+            {
+              key: "review",
+              label: `复盘${dueReviews.filter((r) => !r.completed_at).length ? ` (${dueReviews.filter((r) => !r.completed_at).length})` : ""}`,
+              children: (
+                <div>
+                  <div className="flex items-center gap-4 mb-3 flex-wrap">
+                    <div>
+                      <Text type="secondary" style={{ fontSize: 12 }}>纪律分</Text>
+                      <div style={{ fontSize: 28, fontWeight: 600, lineHeight: 1.1 }}>
+                        {disciplineScore?.score.toFixed(0) ?? "—"}
+                        {disciplineScore?.low_sample && <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>样本偏少</Text>}
+                      </div>
+                    </div>
+                    {disciplineScore && (
+                      <Descriptions size="small" column={2} style={{ flex: 1, minWidth: 380 }} items={[
+                        { key: "c", label: "冷静期 30%", children: `${disciplineScore.cooling_compliance?.toFixed(0) ?? "—"} · ${disciplineScore.cooling_detail}` },
+                        { key: "p", label: "计划交易 25%", children: `${disciplineScore.planned_ratio?.toFixed(0) ?? "—"} · ${disciplineScore.planned_detail}` },
+                        { key: "s", label: "止损执行 25%", children: `${disciplineScore.stop_loss_execution?.toFixed(0) ?? "—"} · ${disciplineScore.stop_loss_detail}` },
+                        { key: "r", label: "复盘完成 20%", children: `${disciplineScore.review_completion?.toFixed(0) ?? "—"} · ${disciplineScore.review_detail}` },
+                      ]} />
+                    )}
+                    <Button size="small" onClick={async () => {
+                      const n = await backfillCapsules();
+                      if (n >= 0) message.success(`已补齐 ${n} 笔历史交易的 T+30 复盘`);
+                    }}>补齐历史复盘</Button>
+                  </div>
+
+                  <div className="grid grid-cols-4 gap-3 mb-3">
+                    {[
+                      ["已结交易", tripStats?.total_trades ?? 0],
+                      ["胜率", `${(tripStats?.win_rate ?? 0).toFixed(0)}%`],
+                      ["盈亏比", tripStats?.profit_factor != null ? tripStats.profit_factor.toFixed(2) : "—"],
+                      ["已结盈亏", (tripStats?.total_realized_pnl ?? 0).toFixed(2)],
+                    ].map(([label, value]) => (
+                      <Card key={String(label)} size="small" styles={{ body: { padding: "10px 14px" } }}>
+                        <Text type="secondary" style={{ fontSize: 12 }}>{label}</Text>
+                        <div style={{ fontSize: 20, fontWeight: 600 }}>{value}</div>
+                      </Card>
+                    ))}
+                  </div>
+
+                  <Text strong style={{ fontSize: 13 }}>T+30 时光机</Text>
+                  <Table
+                    dataSource={dueReviews}
+                    columns={reviewColumns}
+                    rowKey="id"
+                    size="small"
+                    className="mt-2 mb-4"
+                    pagination={{ pageSize: 6, size: "small" }}
+                    locale={{ emptyText: "暂无复盘待办，点「补齐历史复盘」导入历史成交" }}
+                  />
+
+                  <Text strong style={{ fontSize: 13 }}>LIFO 完整交易配对</Text>
+                  <Table
+                    dataSource={roundTrips}
+                    columns={tripColumns}
+                    rowKey={(r) => `${r.symbol}-${r.close_at}-${r.open_at}`}
+                    size="small"
+                    className="mt-2"
+                    pagination={{ pageSize: 8, size: "small" }}
+                    locale={{ emptyText: "暂无已平仓交易" }}
+                  />
+                </div>
+              ),
+            },
+            {
+              key: "memos",
+              label: "投资笔记",
+              children: (
+                <div>
+                  <div className="flex items-center gap-2 mb-3">
+                    <Button size="small" type="primary" onClick={() => setMemoOpen(true)}>写笔记</Button>
+                    <Text type="secondary" style={{ fontSize: 12 }}>创建时冻结当时的持仓、权重、净值与风控事件，之后不再变动。</Text>
+                    <Button size="small" className="ml-auto" onClick={() => compareMemo(null)}>收起对照</Button>
+                  </div>
+                  <Table
+                    dataSource={memos}
+                    columns={memoColumns}
+                    rowKey="id"
+                    size="small"
+                    pagination={false}
+                    locale={{ emptyText: "暂无笔记" }}
+                  />
+                  {memoComparison && (
+                    <Card size="small" title={`「${memoComparison.memo.title}」· 当时 vs 现在`} className="mt-3">
+                      <Descriptions size="small" column={3} items={[
+                        { key: "a", label: "当时总资产", children: memoComparison.then_snapshot?.total_assets_base.toFixed(2) ?? "—" },
+                        { key: "b", label: "现在总资产", children: memoComparison.now_snapshot.total_assets_base.toFixed(2) },
+                        { key: "c", label: "当时单位净值", children: memoComparison.then_snapshot?.unit_nav.toFixed(4) ?? "—" },
+                      ]} />
+                      <div className="mt-2" style={{ whiteSpace: "pre-wrap", fontSize: 13 }}>{memoComparison.memo.content}</div>
+                      <Table
+                        className="mt-3"
+                        dataSource={memoComparison.changes}
+                        rowKey="symbol"
+                        size="small"
+                        pagination={false}
+                        columns={[
+                          { title: "标的", dataIndex: "symbol", key: "symbol" },
+                          { title: "当时权重", dataIndex: "then_weight", key: "then_weight", render: (v: number) => `${v.toFixed(1)}%` },
+                          { title: "现在权重", dataIndex: "now_weight", key: "now_weight", render: (v: number) => `${v.toFixed(1)}%` },
+                          { title: "市值变化", key: "change", render: (_: unknown, r: { value_change: number }) => <span style={{ color: pctColor(r.value_change) }}>{r.value_change >= 0 ? "+" : ""}{r.value_change.toFixed(2)}</span> },
+                        ]}
+                      />
+                    </Card>
+                  )}
+                </div>
+              ),
+            },
+            {
+              key: "advisor",
+              label: "辩证顾问",
+              children: (
+                <div>
+                  <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 10 }}>
+                    只挑战假设、不给买卖指令；观点必须引用本地笔记 / 交易理由 / 风控事件。
+                  </Text>
+                  <Input.TextArea
+                    rows={3}
+                    placeholder="例如：我想现在加仓 RDDT，因为已经跌了很多，逻辑有没有问题？"
+                    value={aiMessage}
+                    onChange={(e) => setAiMessage(e.target.value)}
+                  />
+                  <div className="flex items-center gap-2 mt-2">
+                    <Button size="small" type="primary" loading={aiBusy} onClick={() => askAdvisor(aiMessage)} disabled={!aiMessage.trim()}>发起质询</Button>
+                    <Select
+                      size="small"
+                      style={{ width: 260 }}
+                      placeholder="选一笔成交做单笔分析"
+                      value={aiTxId || undefined}
+                      allowClear
+                      options={dueReviews
+                        .filter((r) => r.transaction_id)
+                        .map((r) => ({
+                          value: r.transaction_id as string,
+                          label: `${r.symbol} · ${r.traded_at?.slice(0, 10) ?? ""}`,
+                        }))}
+                      onChange={(v) => setAiTxId(v ?? "")}
+                    />
+                    <Button size="small" loading={aiBusy} onClick={() => analyzeTrade(aiTxId)} disabled={!aiTxId.trim()}>分析这笔交易</Button>
+                  </div>
+
+                  {advisorReply && (
+                    <Card size="small" title="质询结果" className="mt-3">
+                      <div style={{ whiteSpace: "pre-wrap", fontSize: 13 }}>{advisorReply.reply}</div>
+                      {advisorReply.degraded && <Tag color="orange" className="mt-2">未配置 API Key，仅返回本地证据</Tag>}
+                      {advisorReply.citations.map((c, i) => (
+                        <div key={i} style={{ fontSize: 12, color: "#8c8c8c", marginTop: 6 }}>
+                          [{c.source} / {c.ref_id ?? "—"}] {c.excerpt}
+                        </div>
+                      ))}
+                    </Card>
+                  )}
+                  {analysis && (
+                    <Card size="small" title={`单笔分析 · ${analysis.transaction_id.slice(0, 8)}`} className="mt-3">
+                      {analysis.degraded && <Tag color="orange">未配置 API Key，仅返回本地证据</Tag>}
+                      {analysis.challenges.map((c, i) => (
+                        <div key={i} style={{ marginTop: 8, fontSize: 13 }}>
+                          <strong>· {c.claim}</strong>
+                          <div style={{ color: "#595959" }}>{c.basis}</div>
+                          {c.citation && <div style={{ fontSize: 12, color: "#8c8c8c" }}>出处：{c.citation.source} / {c.citation.ref_id ?? "—"}</div>}
+                        </div>
+                      ))}
+                      {analysis.risk_notes.map((n, i) => <div key={i} style={{ marginTop: 6, fontSize: 13, color: RED }}>· {n}</div>)}
+                      {analysis.raw && <div style={{ whiteSpace: "pre-wrap", marginTop: 8, fontSize: 13 }}>{analysis.raw}</div>}
+                      {!analysis.challenges.length && !analysis.raw && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无可质疑点" />}
+                    </Card>
+                  )}
+                </div>
+              ),
+            },
+            {
+              key: "stress",
+              label: "压力测试",
+              children: (
+                <div>
+                  <div className="flex flex-wrap items-center gap-2 mb-3">
+                    <Text type="secondary" style={{ fontSize: 12 }}>全部持仓</Text>
+                    <InputNumber size="small" style={{ width: 100 }} value={stressGlobal} min={-90} max={200} addonAfter="%" onChange={(v) => setStressGlobal(v ?? 0)} />
+                    <Text type="secondary" style={{ fontSize: 12 }}>单标的</Text>
+                    <Input size="small" style={{ width: 100 }} placeholder="代码" value={stressSymbol} onChange={(e) => setStressSymbol(e.target.value)} />
+                    <InputNumber size="small" style={{ width: 100 }} value={stressSymbolPct} min={-90} max={200} addonAfter="%" onChange={(v) => setStressSymbolPct(v ?? 0)} />
+                    <Button size="small" type="primary" onClick={runStress}>试算</Button>
+                    <Button size="small" onClick={() => fetchContractRisk([])}>合约强平距离</Button>
+                    <Button size="small" onClick={fetchQuality}>数据质量体检</Button>
+                  </div>
+                  {stressResult && (
+                    <Descriptions size="small" column={4} className="mb-3" items={[
+                      { key: "a", label: "当前回撤", children: `${stressResult.baseline_drawdown.toFixed(2)}%` },
+                      { key: "b", label: "假设回撤", children: `${stressResult.stressed_drawdown.toFixed(2)}%` },
+                      { key: "c", label: "总资产变化", children: `${stressResult.baseline_total_assets.toFixed(2)} → ${stressResult.stressed_total_assets.toFixed(2)}` },
+                      { key: "d", label: "状态", children: <Tag color={STATUS[stressResult.status]?.color}>{STATUS[stressResult.status]?.label ?? stressResult.status}</Tag> },
+                    ]} />
+                  )}
+                  {stressResult && stressResult.findings.length > 0 && (
+                    <div className="mb-3">
+                      {stressResult.findings.map((f, i) => (
+                        <Tag key={i} color={SEVERITY[f.severity]?.color} className="mb-1">{f.message}</Tag>
+                      ))}
+                    </div>
+                  )}
+                  {stressResult && (
+                    <Table dataSource={stressResult.deltas} columns={stressColumns} rowKey="symbol" size="small" pagination={false} className="mb-4" />
+                  )}
+                  {contractRisks.length > 0 && (
+                    <>
+                      <Text strong style={{ fontSize: 13 }}>合约强平距离</Text>
+                      <Table dataSource={contractRisks} columns={contractColumns} rowKey="id" size="small" pagination={false} className="mt-2 mb-4" />
+                    </>
+                  )}
+                  {quality && (
+                    <Card size="small" title={`数据质量：检查 ${quality.checked} 项，发现 ${quality.rejected} 项异常`}>
+                      {quality.issues.length === 0
+                        ? <Text type="secondary" style={{ fontSize: 12 }}>未发现异常价格或汇率。</Text>
+                        : quality.issues.map((it, i) => <div key={i} style={{ fontSize: 12 }}><Tag color="orange">{it.kind}</Tag>{it.symbol} · {it.message}</div>)}
+                    </Card>
+                  )}
+                </div>
+              ),
+            },
           ]}
         />
       </Card>
@@ -669,6 +1099,93 @@ export default function RiskPage() {
           placeholder="校准原因（必填）"
           value={calReason}
           onChange={(e) => setCalReason(e.target.value)}
+        />
+      </Modal>
+
+      <Modal
+        title={`T+30 复盘 · ${reviewTarget?.symbol ?? ""}`}
+        open={!!reviewTarget}
+        okText="保存复盘"
+        cancelText="取消"
+        onCancel={() => setReviewTarget(null)}
+        onOk={async () => {
+          if (!reviewTarget) return;
+          const ok = await completeReview(reviewTarget.id, reviewQuality, reviewContent);
+          if (ok) {
+            message.success("复盘已记录");
+            setReviewTarget(null);
+          } else {
+            message.error(useRiskStore.getState().error ?? "保存失败");
+          }
+        }}
+      >
+        {reviewTarget && (
+          <div className="mb-3" style={{ fontSize: 12, color: "#595959" }}>
+            <div>成交日 {reviewTarget.traded_at?.slice(0, 10) ?? "—"} · 到期 {reviewTarget.due_at?.slice(0, 10) ?? "—"}</div>
+            <div>当初理由：{reviewTarget.open_note ?? "未记录"}</div>
+            {reviewTarget.override_reason && <div style={{ color: RED }}>破例理由：{reviewTarget.override_reason}</div>}
+          </div>
+        )}
+        <Select
+          style={{ width: "100%", marginBottom: 12 }}
+          value={reviewQuality}
+          options={[
+            { value: "correct", label: "决策正确：逻辑兑现" },
+            { value: "wrong", label: "决策错误：逻辑未兑现或属冲动交易" },
+            { value: "pending", label: "暂不下结论" },
+          ]}
+          onChange={setReviewQuality}
+        />
+        <Input.TextArea
+          rows={4}
+          placeholder="当初的逻辑兑现了吗？这次破例值不值？"
+          value={reviewContent}
+          onChange={(e) => setReviewContent(e.target.value)}
+        />
+      </Modal>
+
+      <Modal
+        title="写投资笔记"
+        open={memoOpen}
+        okText="保存并冻结快照"
+        cancelText="取消"
+        onCancel={() => setMemoOpen(false)}
+        onOk={async () => {
+          if (!memoForm.title.trim()) {
+            message.warning("请填写标题");
+            return;
+          }
+          const ok = await createMemo({
+            title: memoForm.title.trim(),
+            content: memoForm.content,
+            tags: memoForm.tags.trim() || null,
+          });
+          if (ok) {
+            message.success("笔记已保存，当时持仓快照已冻结");
+            setMemoOpen(false);
+            setMemoForm({ title: "", content: "", tags: "" });
+          } else {
+            message.error(useRiskStore.getState().error ?? "保存失败");
+          }
+        }}
+      >
+        <Input
+          placeholder="标题"
+          value={memoForm.title}
+          onChange={(e) => setMemoForm((f) => ({ ...f, title: e.target.value }))}
+        />
+        <Input
+          className="mt-2"
+          placeholder="标签（逗号分隔，选填）"
+          value={memoForm.tags}
+          onChange={(e) => setMemoForm((f) => ({ ...f, tags: e.target.value }))}
+        />
+        <Input.TextArea
+          className="mt-2"
+          rows={6}
+          placeholder="记录当时的判断、依据与不确定性…"
+          value={memoForm.content}
+          onChange={(e) => setMemoForm((f) => ({ ...f, content: e.target.value }))}
         />
       </Modal>
     </div>

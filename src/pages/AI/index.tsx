@@ -93,6 +93,7 @@ export default function AIPage() {
             name="api_key"
             label="API Key"
             rules={[{ required: true, message: "请输入 API Key" }]}
+            extra="本地加密存储；掩码直接保存即保留原值，清空才会删除。"
           >
             <Input.Password placeholder="sk-..." />
           </Form.Item>
@@ -101,10 +102,10 @@ export default function AIPage() {
             <Input placeholder="https://api.openai.com/v1（默认）" />
           </Form.Item>
 
-          <Form.Item name="system_prompt" label="系统提示词">
+          <Form.Item name="system_prompt" label="系统提示词 / 投资原则">
             <TextArea
               rows={4}
-              placeholder="你是一位专业的投资顾问..."
+              placeholder="写下你的投资原则与认知偏差，辩证顾问会引用它来质疑你的假设…"
             />
           </Form.Item>
 

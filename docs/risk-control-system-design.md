@@ -2,7 +2,7 @@
 
 > 项目：stock-portfolio-manager（Tauri 2 + Rust + React + SQLite，本地单机）
 > 设计依据：`all_documents.zip` 六份参考材料（风和亚洲理念 / RiskControl / 投资镜子 PIP / 过程即奖励）
-> 版本：v1.2 · 2026-11-07 · 状态：**P0 + P1 已实施**（P2–P4 待排期，实施记录见 §16 / §17）
+> 版本：v1.3 · 2026-11-07 · 状态：**P0–P4 全部已实施**（实施记录见 §16–§20；问题与优化清单见 `docs/risk-system-review.md`）
 
 ---
 
@@ -915,4 +915,127 @@ cashflow::record_external_flow(...)         -> ()              // §7.3 方案 A
 
 ---
 
-*§1–§15 为系统设计；§16 记录 P0、§17 记录 P1 的实际落地情况与偏差。文档随实现同步更新。*
+---
+
+## 18. P2 实施记录（2026-11-07）
+
+### 18.1 交付范围
+
+| 层 | 文件 | 内容 |
+|---|---|---|
+| 模型 | `models/reflection.rs` | `RoundTrip / RoundTripStats / DueReview / DisciplineScore / HoldingsSnapshot / InvestmentMemo / MemoComparison` |
+| 服务 | `services/reflection_service.rs` | 纯函数 `pair_round_trips`（LIFO）+ 7 个单测；时光机补齐、复盘回填、纪律分、笔记快照冻结与对照 |
+| 命令 | `commands/reflection.rs` | 10 个命令，`lib.rs` 已注册 |
+| 交易接线 | `commands/transactions.rs` | `INSERT transactions` 后在同一 `BEGIN IMMEDIATE` 内 `ensure_time_capsule`（幂等） |
+| 前端 | `pages/Risk/index.tsx`、`stores/riskStore.ts`、`types/index.ts` | 新增「复盘」「投资笔记」Tab：纪律分四分项、LIFO 明细、T+30 队列、笔记当时 vs 现在对照 |
+
+### 18.2 LIFO 口径
+
+- 按 `(account_id, UPPER(symbol))` 分组、时间排序；`BUY` / `OPEN` 入栈，`SELL` 从栈顶 LIFO 消耗，`PAY` 不参与配对。
+- 一次 SELL 跨多个批次时生成**一条** round-trip（数量加权平均开仓价），用 `split_lots` 标记；`holding_days` 取被消耗的最近批次（LIFO 语义）。
+- 手续费按成交股数比例分摊到两腿：`pnl = 卖出净额 − 买入成本 − 两腿手续费`。
+- `OPEN` 参与配对但不产生现金流；未平仓批次只统计数量、不计入胜率。
+
+### 18.3 与原设计的偏差
+
+| # | 原设计 | 实施 | 理由 |
+|---|---|---|---|
+| 1 | 每笔成交都生成时光机 | 仅 `BUY`/`OPEN` 建仓决策生成 | 复盘对象是「当初为什么买」；SELL 无独立 thesis，生成 6 条空笔记只会淹没队列。SELL 的复盘通过对应建仓批次体现 |
+| 2 | 复盘按 due_at 到期才出现 | 历史补齐后 18 笔立即进入到期队列 | 历史交易本就该复盘，不隐藏；`days_overdue` 显示逾期天数 |
+| 3 | 纪律分四项固定权重 | 分母为 0 的分项不计入，权重在可用项间重归一化，并标 `low_sample` | 新系统上线初期多数分项无样本，按 0 分处理会把纪律分无意义地打到 25 分 |
+| 4 | 冷静期分母＝新建仓次数 | 以 `trade_discipline` 中 `is_unplanned=1 OR cooling_days IS NOT NULL` 识别新开仓 | `trade_discipline` 未存 `has_position`，用已有字段还原；加仓为 PASS 且无标记，不进分母 |
+| 5 | 笔记快照含 HWM 与风控事件 | 含总资产/现金/单位净值/峰值/持仓权重/活跃事件 | 与 §8.4 一致；快照创建时 JSON 冻结，之后不再重算 |
+
+### 18.4 验证结果（真实库副本回放）
+
+| 项目 | 结果 |
+|---|---|
+| 24 笔历史成交 | 配对出 5 笔 round-trip：NTES +69 / LEGN +70 / FISV −65 / NOK −11.25 / **HTT −56**；14 个未平仓批次 |
+| 聚合指标 | 胜率 40%（2 胜 3 负）、盈亏比 1.0510、总已结盈亏 +6.75、平均持有天数可算 |
+| 回归 | HTT 清仓亏损不再被算成 +366 盈利（`c3d4306` 的生产 bug） |
+| 时光机 | 补齐 21 条（19 笔历史 BUY/OPEN + 2 笔回放模拟成交），二次执行 0 条，幂等成立 |
+| 复盘 | 决策质量回填后完成率 1/18 = 5.6%，与 SQL 聚合一致 |
+| 笔记 | 冻结快照 JSON 可解析，含持仓/权重/净值/事件 |
+| 单测 | 7 个纯函数单测（LIFO 顺序、部分卖出、跨批次、手续费、分红豁免、分组隔离、空输入）全通过 |
+
+---
+
+## 19. P3 实施记录（2026-11-07）
+
+### 19.1 交付范围
+
+| 层 | 文件 | 内容 |
+|---|---|---|
+| 模型 | `models/advisor.rs` | `Citation / Challenge / TradeAnalysis / AdvisorReply / LocalEvidence` |
+| 服务 | `services/advisor_service.rs` | 本地 6 源检索（中英混合分词 + 词频评分）、OpenAI 兼容 LLM 调用、结构化 JSON 解析、引用反查、无 Key 降级、结果落 `trade_reviews('ai_analysis')` |
+| 安全 | `services/secret_store.rs`、`services/ai_config_service.rs` | AES-256-GCM 加密 `api_key`、前端掩码回传、掩码回显不覆盖原值、兼容旧明文 |
+| 命令 | `commands/advisor.rs` | `chat_with_advisor` / `analyze_trade`（async） |
+| 前端 | 风控中心「辩证顾问」Tab、AI 设置页提示 | 质询输入、单笔成交下拉、观点与引用渲染、降级标识 |
+
+### 19.2 关键约束的落地方式
+
+- **不给买卖建议**：硬编码系统提示词首条即禁止买入/卖出/目标价/仓位指令；用户自定义 `system_prompt` 追加为「可引用背景」，明确不得覆盖硬规则。
+- **有据可查**：模型返回的每条 `citation` 都与本轮检索到的 `(source, ref_id)` 逐一比对；未匹配的保留观点但把引用置空并标注「未匹配到本地证据」，不编造出处。
+- **数据不出本机**：检索源为 `investment_memos / transactions.notes / risk_events / trade_reviews / watchlist.thesis / risk_rules`；只有拼好的问题文本发往用户自己配置的 LLM 端点。
+- **无 Key 可用**：`ai_config` 无行或 key 为空时返回本地证据清单（`degraded=true`），不抛错、不阻塞 UI。
+- **可追溯**：`analyze_trade` 成功后 upsert 一条 `ai_analysis` 复盘记录（原文 + 引用 JSON），同一交易重复分析不产生重复行。
+
+### 19.3 与原设计的偏差
+
+| # | 原设计 | 实施 | 理由 |
+|---|---|---|---|
+| 1 | SQLite FTS5 全文检索 | 关键词词频评分（中文双字 gram + 英文词） | 个人笔记量级小（当前 0–几十条），FTS5 需建虚拟表 + 触发器同步，收益不抵复杂度；量级上千后再升级 |
+| 2 | `ai::chat(message, conversation_id)` 多轮 | 单轮质询 | 定位是「照镜子」不是聊天机器人；多轮上下文会放大附和倾向，与辩证目标冲突 |
+| 3 | API Key 明文（P4 再加密） | P3 即接入 AES-256-GCM | 加密层与读取层本就同一处，拆到 P4 会让 P3 期间产生一段明文写入窗口 |
+| 4 | `user_profile` 表 | 复用 `ai_config.system_prompt` | 首版避免过度设计，与 §9.2 的「首版可先用」一致 |
+
+### 19.4 加密的诚实边界
+
+`enc:v1:<base64(nonce ‖ AES-GCM 密文)>`，密钥由 `SHA-256(应用盐 ‖ USERPROFILE ‖ USERNAME)` 派生，**不落数据库**。防的是「数据库文件被复制/备份/同步后泄露凭据」。同机同用户运行的进程仍能派生同一密钥——要防这个必须上 OS keychain / DPAPI 交互授权，会破坏跨平台构建并引入弹窗，本版明确不做。旧明文值无前缀、可直接读取，下次保存时自动转为密文。
+
+---
+
+## 20. P4 实施记录（2026-11-07）
+
+### 20.1 交付范围
+
+| 层 | 文件 | 内容 |
+|---|---|---|
+| 校验 | `services/data_quality.rs` | 纯函数 `validate_price / validate_rate / validate_unit_nav` + 5 个单测；只读体检 `check()` 扫价格范围/跳变/大小写重复/陈旧/汇率/净值跳变 |
+| 写入防护 | `services/quote_service.rs` | `save_quotes_to_db` 写入前用上一缓存价校验，脏价跳过并输出日志；`risk_service::update_nav_state` 统一调用 `validate_unit_nav` |
+| 压力试算 | `services/stress_service.rs` | `symbol="*"` 全局冲击 + 单标的覆盖（后者优先）；只读构建上下文、不推进 HWM、不落事件；复用 `risk_engine::evaluate_all` |
+| 上下文隔离 | `services/risk_service.rs` | 新增 `build_context_with_options(db, persist_nav)`，`persist_nav=false` 仅读 HWM |
+| 合约规则 | `services/contract_risk_service.rs` | 强平价近似、强平距离、分级 severity、现价三级兜底；6 个单测 |
+| 命令 | `commands/enhancement.rs` | `stress_test / evaluate_contract_risk / check_data_quality` |
+| 迁移修复 | `db/mod.rs` | 一次性修正早期库 `STALE_DATA=60min` 漂移为 24h，幂等且尊重用户后续自定义 |
+| 前端 | 风控中心「压力测试」Tab | 全局/单标的冲击试算、合约强平距离表、数据质量体检报告 |
+
+### 20.2 关键修复：STALE_DATA 配置漂移
+
+`INSERT OR IGNORE` 不会更新已存在行，导致真实库停留在首版播种的 **60 分钟**，而代码默认已是 1440 分钟。后果是美股盘后与周末所有标的被判行情陈旧，`STOP_LOSS / CONCENTRATION` 全部跳过判定、三铁律静默失效。迁移条件精确匹配 `threshold=60.0 AND description='行情超过 N 分钟未更新'`，执行时同步改写 description，因此幂等；用户之后手动调回 60 也不会被覆盖（回放脚本已断言）。
+
+### 20.3 与原设计的偏差
+
+| # | 原设计 | 实施 | 理由 |
+|---|---|---|---|
+| 1 | 合约规则「P4 启用」 | 默认仍停用，但命令始终返回全部仓位的距离预览 | 规则停用时 UI 已有信息价值；启用与否只影响 severity 是否升级，不改变用户交易行为，避免上线即新增告警噪声 |
+| 2 | 压力测试写 `RiskDashboard` | 返回独立 `StressResult`（含前后对比与 deltas） | 驾驶舱是真实状态，不能被假设场景污染；独立结构也便于并排展示 |
+| 3 | OS 系统通知 | **不做** | 需引入 `tauri-plugin-notification` + 权限配置，且 §10.2 已定「行情陈旧用灰色角标、不用弹窗打扰」；与用户极简偏好冲突，列入后续可选 |
+| 4 | 数据校验拒绝时记 `STALE_DATA` 事件 | 写日志跳过 + 独立体检报告 | 避免脏数据本身制造大量风控事件，反而淹没真实预警 |
+| 5 | 强平价按交易所公式 | 逐仓近似（维持保证金率 0.5%） | 交易所分档维持保证金、全仓/逐仓、资金费率差异大；作为「距离预警信号」足够，明确标注为估算 |
+
+### 20.4 验证结果
+
+| 项目 | 结果 |
+|---|---|
+| `cargo test --lib` | **253 passed / 0 failed / 8 ignored**（本次新增 33 个单测） |
+| `npx tsc --noEmit` | 零错误 |
+| `npm run build` | 通过 |
+| `check_sql_bindings.py` | 199 处绑定匹配、2 处动态 SQL 跳过 |
+| `tests/replay_risk_pipeline.py` | **43/43 通过**（P0 基线 / P1 事务级拦截 / P2 LIFO 真实回放 / P4 迁移与合约） |
+| 数据质量体检 | 真实库识别到 `TCOM` / `tcom` 大小写重复行情行 |
+| 迁移 | 60 → 1440 分钟修正成功，二次执行不覆盖用户自定义 |
+
+---
+
+*§1–§15 为系统设计；§16–§20 依次记录 P0–P4 的实际落地情况与偏差。问题清单与优化建议见 `docs/risk-system-review.md`。文档随实现同步更新。*

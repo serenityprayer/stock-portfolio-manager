@@ -957,3 +957,202 @@ export interface DisciplineStats {
   unplanned: number;
   compliance_rate: number;
 }
+
+// --- P2: LIFO round trips / time capsules / discipline score / memos ---
+export interface RoundTrip {
+  symbol: string;
+  market: string;
+  open_at: string;
+  close_at: string;
+  holding_days: number;
+  qty: number;
+  avg_open_price: number;
+  avg_close_price: number;
+  realized_pnl: number;
+  return_rate: number;
+  open_note: string | null;
+  close_note: string | null;
+  split_lots: boolean;
+}
+
+export interface RoundTripStats {
+  total_trades: number;
+  winning_trades: number;
+  losing_trades: number;
+  win_rate: number;
+  profit_factor: number | null;
+  total_realized_pnl: number;
+  avg_holding_days: number;
+  best_trade: RoundTrip | null;
+  worst_trade: RoundTrip | null;
+  open_lot_count: number;
+}
+
+export interface DueReview {
+  id: string;
+  transaction_id: string | null;
+  symbol: string;
+  market: string;
+  review_type: string;
+  decision_quality: string | null;
+  content: string | null;
+  due_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  traded_at: string | null;
+  open_note: string | null;
+  override_reason: string | null;
+  is_priority: boolean;
+  days_overdue: number;
+}
+
+export interface DisciplineScore {
+  score: number;
+  cooling_compliance: number | null;
+  planned_ratio: number | null;
+  stop_loss_execution: number | null;
+  review_completion: number | null;
+  cooling_detail: string;
+  planned_detail: string;
+  stop_loss_detail: string;
+  review_detail: string;
+  sample_size: number;
+  low_sample: boolean;
+}
+
+export interface SnapshotPosition {
+  symbol: string;
+  name: string;
+  shares: number;
+  avg_cost: number;
+  price: number;
+  market_value_base: number;
+  weight: number;
+  has_quote: boolean;
+}
+
+export interface HoldingsSnapshot {
+  as_of: string;
+  base_currency: string;
+  total_assets_base: number;
+  cash_value_base: number;
+  unit_nav: number;
+  peak_unit_nav: number;
+  positions: SnapshotPosition[];
+  active_events: Array<{
+    rule_id: string;
+    symbol: string | null;
+    severity: RiskSeverity;
+    message: string;
+  }>;
+}
+
+export interface InvestmentMemo {
+  id: string;
+  title: string;
+  content: string;
+  tags: string | null;
+  holdings_snapshot: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MemoInput {
+  title: string;
+  content: string;
+  tags?: string | null;
+}
+
+export interface MemoComparison {
+  memo: InvestmentMemo;
+  then_snapshot: HoldingsSnapshot | null;
+  now_snapshot: HoldingsSnapshot;
+  changes: Array<{
+    symbol: string;
+    then_weight: number;
+    now_weight: number;
+    then_value: number;
+    now_value: number;
+    value_change: number;
+  }>;
+}
+
+// --- P3: dialectic AI advisor ---
+export interface Citation {
+  source: string;
+  ref_id: string | null;
+  excerpt: string;
+}
+
+export interface Challenge {
+  claim: string;
+  basis: string;
+  citation: Citation | null;
+}
+
+export interface TradeAnalysis {
+  verdict: string;
+  challenges: Challenge[];
+  principle_conflicts: Array<{ principle: string; evidence: string }>;
+  risk_notes: string[];
+  suggestions: string[];
+  citations: Citation[];
+  raw: string | null;
+  degraded: boolean;
+  transaction_id: string;
+}
+
+export interface AdvisorReply {
+  reply: string;
+  citations: Citation[];
+  used_sources: string[];
+  degraded: boolean;
+}
+
+// --- P4: data quality / stress test / contract risk ---
+export interface StressOverride {
+  symbol: string;
+  price_change_percent: number;
+}
+
+export interface StressResult {
+  as_of: string;
+  baseline_total_assets: number;
+  stressed_total_assets: number;
+  baseline_drawdown: number;
+  stressed_drawdown: number;
+  status: string;
+  findings: RiskFinding[];
+  deltas: Array<{
+    symbol: string;
+    old_price: number;
+    new_price: number;
+    old_value: number;
+    new_value: number;
+  }>;
+}
+
+export interface ContractPriceInput {
+  symbol: string;
+  price: number;
+}
+
+export interface ContractRiskItem {
+  id: string;
+  symbol: string;
+  position_type: string;
+  leverage: number;
+  open_price: number;
+  current_price: number;
+  liquidation_price: number;
+  distance_percent: number;
+  severity: RiskSeverity;
+  message: string;
+  has_quote: boolean;
+}
+
+export interface DataQualityReport {
+  checked: number;
+  rejected: number;
+  issues: Array<{ kind: string; symbol: string; message: string }>;
+}
