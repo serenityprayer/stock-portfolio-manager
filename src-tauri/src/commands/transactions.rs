@@ -2,6 +2,7 @@ use crate::db::Database;
 use crate::models::risk::{TradeRiskContext, VERDICT_BLOCK, VERDICT_WARN};
 use crate::models::Transaction;
 use crate::services::discipline_service;
+use crate::services::reflection_service;
 use crate::services::quote_provider_service::market_adjusts_sell_pay_cost;
 use crate::services::quote_service::{cash_display_name, CASH_SYMBOL_PREFIX};
 use tauri::State;
@@ -193,6 +194,14 @@ pub fn create_transaction(
             ],
         )
         .map_err(|e| e.to_string())?;
+
+        // P2 time capsule: every NEW position decision gets a T+30 review.
+        // Idempotent and inside the same transaction — a trade can never be
+        // recorded without its future review. SELL/PAY are intentionally
+        // excluded: the review target is the original "why did I buy" thesis.
+        if matches!(transaction_type.as_str(), "BUY" | "OPEN") {
+            reflection_service::ensure_time_capsule(&conn, &id, &symbol, &traded_at)?;
+        }
 
         // P1 discipline gate. Runs inside the SAME transaction as the trade,
         // so "filled but not logged" can never happen. The verdict is recomputed

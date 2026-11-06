@@ -178,8 +178,26 @@ pub fn load_quotes_from_db(db: &Database) -> Result<Vec<StockQuote>, String> {
 }
 
 /// Persist quotes to the database (upsert).
+///
+/// P4 guard: a price outside [0.01, 100000] or jumping >95% versus the last
+/// cached value is skipped rather than written. Dirty行情 would otherwise
+/// trigger a false stop-loss / drawdown circuit breaker (design doc §11.2).
 pub fn save_quotes_to_db(db: &Database, quotes: &[StockQuote]) -> Result<(), String> {
     let conn = db.conn.lock().map_err(|e| e.to_string())?;
+    let mut previous: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT symbol, current_price FROM cached_quotes")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        for (sym, price) in rows {
+            previous.insert(sym.to_uppercase(), price);
+        }
+    }
     let mut stmt = conn
         .prepare(
             "INSERT OR REPLACE INTO cached_quotes
@@ -190,6 +208,14 @@ pub fn save_quotes_to_db(db: &Database, quotes: &[StockQuote]) -> Result<(), Str
         )
         .map_err(|e| e.to_string())?;
     for q in quotes {
+        let key = q.symbol.to_uppercase();
+        if let Err(e) = crate::services::data_quality::validate_price(
+            previous.get(&key).copied(),
+            q.current_price,
+        ) {
+            eprintln!("[data-quality] 拒绝写入 {}：{}", q.symbol, e);
+            continue;
+        }
         stmt.execute(rusqlite::params![
             q.symbol,
             q.name,
@@ -206,6 +232,7 @@ pub fn save_quotes_to_db(db: &Database, quotes: &[StockQuote]) -> Result<(), Str
             q.updated_at,
         ])
         .map_err(|e| e.to_string())?;
+        previous.insert(key, q.current_price);
     }
     Ok(())
 }

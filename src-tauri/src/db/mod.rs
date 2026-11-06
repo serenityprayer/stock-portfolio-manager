@@ -881,6 +881,20 @@ fn migrate_risk_control_tables(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // One-time correction for databases seeded by the very first P0 build:
+    // STALE_DATA was 60 minutes, which marks every US holding stale after
+    // close / on weekends and silently disables all three iron laws. The
+    // predicate also rewrites the description, so this is idempotent and a
+    // user who later chooses 60 again will not be overridden.
+    conn.execute(
+        "UPDATE risk_rules
+         SET threshold = 1440.0,
+             description = '行情超过 N 分钟未更新（默认 24h，覆盖隔夜与周末）'
+         WHERE id = 'STALE_DATA' AND threshold = 60.0
+           AND description = '行情超过 N 分钟未更新'",
+        [],
+    )?;
+
     Ok(())
 }
 

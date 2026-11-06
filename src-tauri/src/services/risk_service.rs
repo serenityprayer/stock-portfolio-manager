@@ -7,6 +7,7 @@
 use crate::db::Database;
 use crate::models::risk::*;
 use crate::models::ExchangeRates;
+use crate::services::data_quality;
 use crate::services::exchange_rate_service::convert_currency;
 use crate::services::quote_service::is_cash_symbol;
 use crate::services::risk_engine::{
@@ -131,7 +132,7 @@ struct RawHolding {
     currency: String,
 }
 
-fn quote_age_secs(updated_at: &str) -> i64 {
+pub(crate) fn quote_age_secs(updated_at: &str) -> i64 {
     DateTime::parse_from_rfc3339(updated_at)
         .map(|dt| (Utc::now() - dt.with_timezone(&Utc)).num_seconds().max(0))
         .unwrap_or(i64::MAX / 4)
@@ -140,6 +141,16 @@ fn quote_age_secs(updated_at: &str) -> i64 {
 /// Build the live risk context. Returns an error only on genuine DB failure;
 /// missing quotes are represented as data-quality findings, never as price 0.
 pub fn build_context(db: &Database) -> Result<RiskContext, String> {
+    build_context_with_options(db, true)
+}
+
+/// `persist_nav = false` is used by P4 stress tests: build an identical context
+/// but do NOT advance the persisted high-water mark. A what-if preview must
+/// never change real risk state.
+pub fn build_context_with_options(
+    db: &Database,
+    persist_nav: bool,
+) -> Result<RiskContext, String> {
     let conn = db.conn.lock().map_err(|e| e.to_string())?;
     let rules = load_rules(&conn)?;
     let rates = load_rates(&conn);
@@ -263,11 +274,16 @@ pub fn build_context(db: &Database) -> Result<RiskContext, String> {
         });
     }
 
+    let read_only_hwm = get_hwm_with_conn(&conn)?;
     drop(conn);
 
     // NAV state is persisted (HWM only ever increases) and must be computed
-    // after the connection used above is released.
-    let hwm = update_nav_state(db, total_assets_base)?;
+    // after the connection used above is released — except in what-if mode.
+    let hwm = if persist_nav {
+        update_nav_state(db, total_assets_base)?
+    } else {
+        read_only_hwm
+    };
 
     Ok(RiskContext {
         as_of: now_utc_str(),
@@ -379,7 +395,8 @@ pub fn update_nav_state(db: &Database, total_assets_base: f64) -> Result<HwmStat
         unit_nav = 1.0;
     }
     // 防御：行情异常导致的 >95% 单日跳变不落库（防止 HWM 被脏数据锁死）。
-    if state.current_unit_nav > 0.0 && (unit_nav / state.current_unit_nav - 1.0).abs() > 0.95 {
+    // 阈值统一由 data_quality 维护，避免两处常量漂移。
+    if data_quality::validate_unit_nav(state.current_unit_nav, unit_nav).is_err() {
         unit_nav = state.current_unit_nav;
     }
 

@@ -282,6 +282,24 @@ pub fn run() {
             commands::discipline::remove_watchlist_item,
             commands::discipline::precheck_trade,
             commands::discipline::get_discipline_stats,
+            // Reflection / time capsules / memos (P2)
+            commands::reflection::get_round_trips,
+            commands::reflection::get_round_trip_stats,
+            commands::reflection::list_due_reviews,
+            commands::reflection::backfill_time_capsules,
+            commands::reflection::complete_review,
+            commands::reflection::get_discipline_score,
+            commands::reflection::list_memos,
+            commands::reflection::create_memo,
+            commands::reflection::delete_memo,
+            commands::reflection::compare_memo,
+            // Dialectic advisor (P3)
+            commands::advisor::chat_with_advisor,
+            commands::advisor::analyze_trade,
+            // Enhancements (P4)
+            commands::enhancement::stress_test,
+            commands::enhancement::evaluate_contract_risk,
+            commands::enhancement::check_data_quality,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
