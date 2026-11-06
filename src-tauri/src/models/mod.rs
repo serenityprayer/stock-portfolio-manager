@@ -13,6 +13,7 @@ pub mod quarterly;
 pub mod quote;
 pub mod quote_provider;
 pub mod review;
+pub mod risk;
 pub mod statistics;
 pub mod transaction;
 pub mod valuation;

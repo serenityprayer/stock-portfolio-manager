@@ -19,6 +19,7 @@ import TrendsPage from "./pages/Quarterly/TrendsPage";
 import ImportPage from "./pages/Import";
 import AlertsPage from "./pages/Alerts";
 import ReviewPage from "./pages/Review";
+import RiskPage from "./pages/Risk";
 import CryptoSpotPage from "./pages/CryptoSpot";
 import CryptoContractPage from "./pages/CryptoContract";
 import SettingsPage from "./pages/Settings";
@@ -122,6 +123,7 @@ function App() {
           <Route path="/import" element={<ImportPage />} />
           <Route path="/alerts" element={<AlertsPage />} />
           <Route path="/review" element={<ReviewPage />} />
+          <Route path="/risk" element={<RiskPage />} />
           <Route path="/crypto-spot" element={<CryptoSpotPage />} />
           <Route path="/crypto-contract" element={<CryptoContractPage />} />
           <Route path="/settings" element={<SettingsPage />} />

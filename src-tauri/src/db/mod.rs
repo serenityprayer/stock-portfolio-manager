@@ -621,6 +621,8 @@ impl Database {
             );
         ")?;
 
+        migrate_risk_control_tables(&conn)?;
+
         migrate_transactions_check_constraint(&conn)?;
 
         // Convert synthetic BUY records to OPEN type so they are correctly
@@ -703,6 +705,181 @@ fn migrate_transactions_check_constraint(conn: &Connection) -> Result<()> {
 
         PRAGMA foreign_keys = ON;
     ")?;
+
+    Ok(())
+}
+
+/// Risk & Discipline Engine tables.
+///
+/// All tables are additive: no existing table is altered, so this migration is
+/// safe to run against any older database. Rules are seeded with INSERT OR
+/// IGNORE so user-tuned thresholds are never overwritten on upgrade.
+fn migrate_risk_control_tables(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS risk_rules (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL,
+            description TEXT,
+            severity    TEXT NOT NULL,
+            enabled     INTEGER NOT NULL DEFAULT 1,
+            threshold   REAL,
+            params      TEXT,
+            updated_at  TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS risk_events (
+            id                 TEXT PRIMARY KEY,
+            rule_id            TEXT NOT NULL,
+            symbol             TEXT,
+            account_id         TEXT,
+            severity           TEXT NOT NULL,
+            status             TEXT NOT NULL,
+            metric_value       REAL,
+            threshold          REAL,
+            message            TEXT NOT NULL,
+            context            TEXT,
+            first_triggered_at TEXT NOT NULL,
+            last_triggered_at  TEXT NOT NULL,
+            resolved_at        TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_risk_events_active
+            ON risk_events(status, rule_id, symbol);
+
+        -- Unit-NAV high-water mark (TWR based, immune to deposits/withdrawals).
+        -- base_value is the总资产 at the moment the NAV series was anchored;
+        -- net_external_flow is the cumulative external cash flow since then.
+        CREATE TABLE IF NOT EXISTS portfolio_hwm (
+            scope_key          TEXT PRIMARY KEY,
+            peak_unit_nav      REAL NOT NULL,
+            peak_date          TEXT NOT NULL,
+            current_unit_nav   REAL NOT NULL,
+            base_value         REAL NOT NULL DEFAULT 0,
+            base_date          TEXT NOT NULL DEFAULT '',
+            net_external_flow  REAL NOT NULL DEFAULT 0,
+            updated_at         TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS watchlist (
+            id           TEXT PRIMARY KEY,
+            symbol       TEXT NOT NULL,
+            name         TEXT,
+            market       TEXT NOT NULL,
+            currency     TEXT,
+            added_at     TEXT NOT NULL,
+            thesis       TEXT,
+            target_price REAL,
+            status       TEXT NOT NULL DEFAULT 'watching',
+            promoted_at  TEXT,
+            created_at   TEXT NOT NULL,
+            updated_at   TEXT NOT NULL,
+            UNIQUE(symbol, market)
+        );
+        CREATE INDEX IF NOT EXISTS idx_watchlist_added ON watchlist(added_at);
+
+        CREATE TABLE IF NOT EXISTS trade_discipline (
+            id               TEXT PRIMARY KEY,
+            transaction_id   TEXT,
+            symbol           TEXT NOT NULL,
+            action           TEXT NOT NULL,
+            verdict          TEXT NOT NULL,
+            rule_ids         TEXT,
+            cooling_days     REAL,
+            is_unplanned     INTEGER NOT NULL DEFAULT 0,
+            override_reason  TEXT,
+            decided_at       TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_trade_discipline_symbol
+            ON trade_discipline(symbol, decided_at);
+
+        CREATE TABLE IF NOT EXISTS investment_memos (
+            id                TEXT PRIMARY KEY,
+            title             TEXT NOT NULL,
+            content           TEXT NOT NULL,
+            tags              TEXT,
+            holdings_snapshot TEXT,
+            created_at        TEXT NOT NULL,
+            updated_at        TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS trade_reviews (
+            id               TEXT PRIMARY KEY,
+            transaction_id   TEXT,
+            symbol           TEXT NOT NULL,
+            review_type      TEXT NOT NULL,
+            decision_quality TEXT,
+            content          TEXT,
+            citations        TEXT,
+            due_at           TEXT,
+            completed_at     TEXT,
+            created_at       TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_trade_reviews_due
+            ON trade_reviews(due_at, completed_at);
+
+        -- Explicit external cash flows (deposit/withdraw). This is the F_t in
+        -- the TWR formula; without it deposits inflate NAV and withdrawals
+        -- would trigger false drawdown circuit breakers.
+        CREATE TABLE IF NOT EXISTS external_cash_flows (
+            id           TEXT PRIMARY KEY,
+            account_id   TEXT NOT NULL,
+            currency     TEXT NOT NULL,
+            market       TEXT NOT NULL,
+            flow_type    TEXT NOT NULL,
+            amount       REAL NOT NULL,
+            amount_base  REAL NOT NULL DEFAULT 0,
+            counted_in_base INTEGER NOT NULL DEFAULT 0,
+            occurred_at  TEXT NOT NULL,
+            note         TEXT,
+            created_at   TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_external_cash_flows_date
+            ON external_cash_flows(occurred_at);
+        ",
+    )?;
+
+    // Idempotent column upgrades for databases created by an earlier build.
+    let cols: std::collections::HashSet<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('external_cash_flows')")
+        .and_then(|mut stmt| {
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            rows.collect::<Result<std::collections::HashSet<_>, _>>()
+        })
+        .unwrap_or_default();
+    if !cols.contains("amount_base") {
+        conn.execute(
+            "ALTER TABLE external_cash_flows ADD COLUMN amount_base REAL NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    if !cols.contains("counted_in_base") {
+        conn.execute(
+            "ALTER TABLE external_cash_flows ADD COLUMN counted_in_base INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    // (id, 名称, 说明, severity, threshold, enabled)
+    // CONTRACT_LIQUIDATION_DISTANCE 是 P4 预留：加密合约口径与现货不同，
+    // 单独设「强平距离」规则，不混进现货三铁律，首版默认停用。
+    let rules: [(&str, &str, &str, &str, Option<f64>, i32); 7] = [
+        ("STOP_LOSS", "止损红线", "单笔持仓亏损超过阈值", "critical", Some(-20.0), 1),
+        ("MAX_DRAWDOWN", "最大回撤熔断", "单位净值较 HWM 回撤超阈值", "block", Some(-5.0), 1),
+        ("CONCENTRATION", "个股持仓上限", "单标的占总资产超阈值", "warning", Some(15.0), 1),
+        ("COOLING_PERIOD", "7日冷静期", "观察期未满买入", "block", Some(7.0), 1),
+        ("UNPLANNED_TRADE", "非计划交易", "既无持仓也不在观察列表", "warning", None, 1),
+        ("STALE_DATA", "行情陈旧", "行情超过 N 分钟未更新（默认 24h，覆盖隔夜与周末）", "info", Some(1440.0), 1),
+        ("CONTRACT_LIQUIDATION_DISTANCE", "合约强平距离", "现价距强平价过近（P4 启用）", "critical", Some(20.0), 0),
+    ];
+    for (id, name, desc, severity, threshold, enabled) in rules {
+        conn.execute(
+            "INSERT OR IGNORE INTO risk_rules
+             (id, name, description, severity, enabled, threshold, params, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
+            params![id, name, desc, severity, enabled, threshold, now],
+        )?;
+    }
 
     Ok(())
 }

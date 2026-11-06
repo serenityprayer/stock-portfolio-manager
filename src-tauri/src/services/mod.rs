@@ -1,5 +1,6 @@
 pub mod ai_config_service;
 pub mod alert_service;
+pub mod cashflow_service;
 pub mod contract_performance_service;
 pub mod exchange_rate_service;
 pub mod http_client;
@@ -9,5 +10,7 @@ pub mod quarterly_service;
 pub mod quote_provider_service;
 pub mod quote_service;
 pub mod review_service;
+pub mod risk_engine;
+pub mod risk_service;
 pub mod snapshot_service;
 pub mod valuation_service;

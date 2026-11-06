@@ -797,3 +797,100 @@ export interface ContractPerformanceSummary {
   win_rate: number;
   return_series: ContractReturnPoint[];
 }
+
+// --- Risk & Discipline Engine ---
+
+export type RiskSeverity = "info" | "warning" | "critical" | "block";
+
+export interface RiskRuleConfig {
+  id: string;
+  name: string;
+  description: string | null;
+  severity: RiskSeverity;
+  enabled: boolean;
+  threshold: number | null;
+  params: string | null;
+  updated_at: string;
+}
+
+export interface RiskEvent {
+  id: string;
+  rule_id: string;
+  symbol: string | null;
+  account_id: string | null;
+  severity: RiskSeverity;
+  status: "active" | "acknowledged" | "resolved";
+  metric_value: number | null;
+  threshold: number | null;
+  message: string;
+  context: string | null;
+  first_triggered_at: string;
+  last_triggered_at: string;
+  resolved_at: string | null;
+}
+
+export interface QuoteFreshness {
+  has_quotes: boolean;
+  stale_symbols: string[];
+  missing_symbols: string[];
+  oldest_quote_age_secs: number;
+  stale_threshold_secs: number;
+}
+
+export interface RiskFinding {
+  rule_id: string;
+  severity: RiskSeverity;
+  symbol: string | null;
+  metric: number;
+  threshold: number;
+  message: string;
+  context: Record<string, unknown>;
+}
+
+export interface HwmState {
+  scope_key: string;
+  peak_unit_nav: number;
+  peak_date: string;
+  current_unit_nav: number;
+  base_value: number;
+  base_date: string;
+  net_external_flow: number;
+  updated_at: string;
+}
+
+export interface ExternalCashFlow {
+  id: string;
+  account_id: string;
+  currency: string;
+  market: string;
+  flow_type: "DEPOSIT" | "WITHDRAW" | "DIVIDEND_ADJUST";
+  amount: number;
+  occurred_at: string;
+  note: string | null;
+  created_at: string;
+}
+
+export interface RiskDashboard {
+  status: "normal" | "warning" | "blocked";
+  as_of: string;
+  base_currency: string;
+  total_assets: number;
+  cash_value: number;
+  unit_nav: number;
+  peak_unit_nav: number;
+  current_drawdown: number;
+  drawdown_threshold: number;
+  stop_loss_count: number;
+  stop_loss_threshold: number;
+  max_weight: number;
+  max_weight_symbol: string;
+  concentration_threshold: number;
+  net_external_flow: number;
+  hwm_base_date: string;
+  hwm_note: string;
+  position_count: number;
+  quote_freshness: QuoteFreshness;
+  findings: RiskFinding[];
+  events: RiskEvent[];
+  rules: RiskRuleConfig[];
+}

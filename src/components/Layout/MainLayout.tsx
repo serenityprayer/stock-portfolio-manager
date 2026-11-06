@@ -15,6 +15,7 @@ import {
   HistoryOutlined,
   SettingOutlined,
   FundOutlined,
+  SafetyCertificateOutlined,
 } from "@ant-design/icons";
 
 const { Sider, Content } = Layout;
@@ -23,6 +24,7 @@ const menuItems = [
   { key: "/dashboard", icon: <DashboardOutlined />, label: "仪表盘" },
   { key: "/statistics", icon: <BarChartOutlined />, label: "统计分析" },
   { key: "/performance", icon: <LineChartOutlined />, label: "绩效分析" },
+  { key: "/risk", icon: <SafetyCertificateOutlined />, label: "风控中心" },
   { key: "/quarterly", icon: <CalendarOutlined />, label: "季度分析" },
   { key: "/accounts", icon: <BankOutlined />, label: "证券账户" },
   { key: "/holdings", icon: <StockOutlined />, label: "持仓管理" },

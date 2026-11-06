@@ -266,6 +266,17 @@ pub fn run() {
             commands::contract_performance::initialize_contract_performance,
             // Valuation
             commands::valuation::get_portfolio_valuation,
+            // Risk & Discipline Engine (P0)
+            commands::risk::get_risk_dashboard,
+            commands::risk::evaluate_risk,
+            commands::risk::acknowledge_risk_event,
+            commands::risk::get_risk_rules,
+            commands::risk::update_risk_rule,
+            commands::risk::get_hwm_state,
+            commands::risk::recalibrate_hwm,
+            commands::cashflow::list_external_flows,
+            commands::cashflow::record_external_flow,
+            commands::cashflow::delete_external_flow,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
