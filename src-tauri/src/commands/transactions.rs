@@ -1,5 +1,7 @@
 use crate::db::Database;
+use crate::models::risk::{TradeRiskContext, VERDICT_BLOCK, VERDICT_WARN};
 use crate::models::Transaction;
+use crate::services::discipline_service;
 use crate::services::quote_provider_service::market_adjusts_sell_pay_cost;
 use crate::services::quote_service::{cash_display_name, CASH_SYMBOL_PREFIX};
 use tauri::State;
@@ -82,6 +84,11 @@ pub fn create_transaction(
     currency: String,
     traded_at: String,
     notes: Option<String>,
+    // Optional discipline gate. None = historical/backfill import (CSV dialogs),
+    // which must not be blocked by cooling-off rules. Some = manual entry; the
+    // backend re-evaluates the verdict inside the same transaction so a BLOCK
+    // cannot be bypassed from the front end.
+    risk_context: Option<TradeRiskContext>,
 ) -> Result<Transaction, String> {
     let conn = db.conn.lock().map_err(|e| e.to_string())?;
     let id = uuid::Uuid::new_v4().to_string();
@@ -186,6 +193,42 @@ pub fn create_transaction(
             ],
         )
         .map_err(|e| e.to_string())?;
+
+        // P1 discipline gate. Runs inside the SAME transaction as the trade,
+        // so "filled but not logged" can never happen. The verdict is recomputed
+        // here rather than trusting the front-end precheck result.
+        if let Some(ctx) = risk_context.as_ref() {
+            let verdict = discipline_service::evaluate_trade_intent(
+                &conn,
+                &symbol,
+                &market,
+                &transaction_type,
+            )?;
+            let reason = ctx
+                .override_reason
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if verdict.level == VERDICT_BLOCK && reason.is_empty() {
+                return Err(format!(
+                    "交易被风控拦截：{}。如仍要执行，请填写覆盖理由。",
+                    verdict.message
+                ));
+            }
+            if verdict.level == VERDICT_WARN && !ctx.ack_warning {
+                return Err(format!("需要二次确认：{}", verdict.message));
+            }
+            let stored_reason = if reason.is_empty() {
+                None
+            } else {
+                Some(reason.as_str())
+            };
+            discipline_service::record_discipline(&conn, &id, &verdict, stored_reason)?;
+            if transaction_type == "BUY" && verdict.in_watchlist {
+                discipline_service::promote_watch_item(&conn, &symbol, &market)?;
+            }
+        }
 
         // Auto-update cash holding for the account
         let delta = cash_delta(&transaction_type, total_amount, commission);

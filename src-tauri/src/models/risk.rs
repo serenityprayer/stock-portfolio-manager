@@ -159,3 +159,100 @@ pub struct RiskDashboard {
     pub events: Vec<RiskEvent>,
     pub rules: Vec<RiskRuleConfig>,
 }
+
+// ────────────────────────────────────────────────────────────────
+// P1: watchlist / cooling period / trade discipline
+// ────────────────────────────────────────────────────────────────
+
+pub const VERDICT_PASS: &str = "PASS";
+pub const VERDICT_WARN: &str = "WARN";
+pub const VERDICT_BLOCK: &str = "BLOCK";
+
+pub const RULE_COOLING_PERIOD: &str = "COOLING_PERIOD";
+pub const RULE_UNPLANNED_TRADE: &str = "UNPLANNED_TRADE";
+
+/// One entry in the 7-day cooling-off watchlist.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchItem {
+    pub id: String,
+    pub symbol: String,
+    pub name: Option<String>,
+    pub market: String,
+    pub currency: Option<String>,
+    pub added_at: String,
+    pub thesis: Option<String>,
+    pub target_price: Option<f64>,
+    pub status: String,
+    pub promoted_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    /// Days since `added_at` (fractional, UTC based).
+    pub cooling_days: f64,
+    /// Days still required before the item becomes eligible.
+    pub days_remaining: f64,
+    pub eligible: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchItemInput {
+    pub symbol: String,
+    pub name: Option<String>,
+    pub market: String,
+    pub currency: Option<String>,
+    pub thesis: Option<String>,
+    pub target_price: Option<f64>,
+    /// Optional back-date in YYYY-MM-DD form; defaults to now.
+    pub added_at: Option<String>,
+}
+
+/// Result of the pre-trade discipline check.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TradeVerdict {
+    /// PASS | WARN | BLOCK
+    pub level: String,
+    pub message: String,
+    pub symbol: String,
+    pub action: String,
+    pub has_position: bool,
+    pub in_watchlist: bool,
+    pub cooling_days: Option<f64>,
+    pub days_remaining: Option<f64>,
+    pub is_unplanned: bool,
+    /// BLOCK requires a non-empty override reason before the trade can proceed.
+    pub requires_reason: bool,
+    pub rule_ids: Vec<String>,
+}
+
+/// Optional payload on `create_transaction`. When absent the trade is treated
+/// as a historical/backfill import and no discipline gate is applied — this is
+/// what keeps the five CSV import dialogs working unchanged.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TradeRiskContext {
+    pub override_reason: Option<String>,
+    pub ack_warning: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DisciplineRecord {
+    pub id: String,
+    pub transaction_id: Option<String>,
+    pub symbol: String,
+    pub action: String,
+    pub verdict: String,
+    pub rule_ids: Option<String>,
+    pub cooling_days: Option<f64>,
+    pub is_unplanned: bool,
+    pub override_reason: Option<String>,
+    pub decided_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DisciplineStats {
+    pub total: i64,
+    pub blocked: i64,
+    pub warn: i64,
+    pub overridden: i64,
+    pub unplanned: i64,
+    /// Percentage of BUY decisions that were not overridden / unplanned.
+    pub compliance_rate: f64,
+}

@@ -8,6 +8,7 @@ pub mod crypto_contract;
 pub mod crypto_spot;
 pub mod crypto_quotes;
 pub mod dashboard;
+pub mod discipline;
 pub mod exchange_rates;
 pub mod holdings;
 pub mod import_export;

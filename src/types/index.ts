@@ -456,6 +456,8 @@ export interface CreateTransactionPayload {
   currency: Currency;
   tradedAt: string;
   notes?: string;
+  /** Manual entries pass this to enable the P1 discipline gate; CSV imports omit it. */
+  riskContext?: TradeRiskContext;
 }
 
 export interface UpdateTransactionPayload {
@@ -893,4 +895,65 @@ export interface RiskDashboard {
   findings: RiskFinding[];
   events: RiskEvent[];
   rules: RiskRuleConfig[];
+}
+
+// --- P1: watchlist / cooling period / trade discipline ---
+export type VerdictLevel = "PASS" | "WARN" | "BLOCK";
+
+export interface WatchItem {
+  id: string;
+  symbol: string;
+  name: string | null;
+  market: string;
+  currency: string | null;
+  added_at: string;
+  thesis: string | null;
+  target_price: number | null;
+  status: string;
+  promoted_at: string | null;
+  created_at: string;
+  updated_at: string;
+  cooling_days: number;
+  days_remaining: number;
+  eligible: boolean;
+}
+
+export interface WatchItemInput {
+  symbol: string;
+  name?: string | null;
+  market: string;
+  currency?: string | null;
+  thesis?: string | null;
+  target_price?: number | null;
+  /** YYYY-MM-DD; defaults to today. */
+  added_at?: string | null;
+}
+
+export interface TradeVerdict {
+  level: VerdictLevel;
+  message: string;
+  symbol: string;
+  action: string;
+  has_position: boolean;
+  in_watchlist: boolean;
+  cooling_days: number | null;
+  days_remaining: number | null;
+  is_unplanned: boolean;
+  requires_reason: boolean;
+  rule_ids: string[];
+}
+
+/** Struct fields stay snake_case (serde), the command arg itself is camelCase. */
+export interface TradeRiskContext {
+  override_reason?: string | null;
+  ack_warning: boolean;
+}
+
+export interface DisciplineStats {
+  total: number;
+  blocked: number;
+  warn: number;
+  overridden: number;
+  unplanned: number;
+  compliance_rate: number;
 }

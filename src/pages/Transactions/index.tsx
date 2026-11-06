@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from "react";
 import {
+  Alert,
   Typography,
   Button,
   Table,
@@ -22,7 +23,11 @@ import dayjs from "dayjs";
 import { invoke } from "@tauri-apps/api/core";
 import { useTransactionStore } from "../../stores/transactionStore";
 import { useAccountStore } from "../../stores/accountStore";
-import type { Transaction, Market, Currency, TransactionType, Holding, StockQuote } from "../../types";
+import { useRiskStore } from "../../stores/riskStore";
+import type {
+  Transaction, Market, Currency, TransactionType, Holding, StockQuote,
+  CreateTransactionPayload, TradeVerdict,
+} from "../../types";
 import ImportFromImageModal from "./ImportFromImageModal";
 import ImportFromIbCsvModal from "./ImportFromIbCsvModal";
 import ImportFromMoomooCsvModal from "./ImportFromMoomooCsvModal";
@@ -78,6 +83,11 @@ export default function TransactionsPage() {
   const [csvImportModalOpen, setCsvImportModalOpen] = useState(false);
   const [moomooCsvImportModalOpen, setMoomooCsvImportModalOpen] = useState(false);
   const [firstradeCsvImportModalOpen, setFirstradeCsvImportModalOpen] = useState(false);
+  const [riskVerdict, setRiskVerdict] = useState<TradeVerdict | null>(null);
+  const [riskModalOpen, setRiskModalOpen] = useState(false);
+  const [overrideReason, setOverrideReason] = useState("");
+  const [pendingPayload, setPendingPayload] = useState<CreateTransactionPayload | null>(null);
+  const precheck = useRiskStore((s) => s.precheck);
 
   useEffect(() => {
     fetchTransactions();
@@ -191,6 +201,15 @@ export default function TransactionsPage() {
     const submittedValues = values.transactionType === "PAY"
       ? { ...values, shares: 0, price: 0 }
       : values;
+    const payload: CreateTransactionPayload = {
+      ...submittedValues,
+      tradedAt: submittedValues.tradedAt.toISOString(),
+    };
+    const closeForm = () => {
+      setModalOpen(false);
+      setEditingTransaction(null);
+      form.resetFields();
+    };
     try {
       if (editingTransaction) {
         await updateTransaction({
@@ -199,13 +218,54 @@ export default function TransactionsPage() {
           tradedAt: submittedValues.tradedAt.toISOString(),
         });
         message.success("交易记录更新成功");
-      } else {
-        await createTransaction({
-          ...submittedValues,
-          tradedAt: submittedValues.tradedAt.toISOString(),
-        });
-        message.success("交易记录添加成功");
+        closeForm();
+        return;
       }
+      // P1 discipline gate applies to manual BUY only. CSV backfills call
+      // create_transaction without riskContext and are never blocked.
+      if (submittedValues.transactionType === "BUY") {
+        const verdict = await precheck(submittedValues.symbol, submittedValues.market, "BUY");
+        if (verdict.level === "PASS") {
+          await createTransaction({
+            ...payload,
+            riskContext: { ack_warning: false, override_reason: null },
+          });
+        } else {
+          setPendingPayload(payload);
+          setRiskVerdict(verdict);
+          setOverrideReason("");
+          setRiskModalOpen(true);
+          return;
+        }
+      } else {
+        await createTransaction(payload);
+      }
+      message.success("交易记录添加成功");
+      closeForm();
+    } catch (err) {
+      message.error(`操作失败: ${err}`);
+    }
+  };
+
+  const confirmRiskOverride = async () => {
+    if (!pendingPayload || !riskVerdict) return;
+    if (riskVerdict.level === "BLOCK" && !overrideReason.trim()) {
+      message.warning("请填写覆盖理由");
+      return;
+    }
+    try {
+      await createTransaction({
+        ...pendingPayload,
+        riskContext: {
+          ack_warning: riskVerdict.level === "WARN",
+          override_reason: overrideReason.trim() || null,
+        },
+      });
+      message.success("交易记录添加成功");
+      setRiskModalOpen(false);
+      setPendingPayload(null);
+      setRiskVerdict(null);
+      setOverrideReason("");
       setModalOpen(false);
       setEditingTransaction(null);
       form.resetFields();
@@ -684,6 +744,42 @@ export default function TransactionsPage() {
           />
         ) : null;
       })()}
+
+      <Modal
+        title={riskVerdict?.level === "BLOCK" ? "交易被拦截" : "非计划交易确认"}
+        open={riskModalOpen}
+        okText={riskVerdict?.level === "BLOCK" ? "仍要买入" : "确认买入"}
+        okButtonProps={{ danger: riskVerdict?.level === "BLOCK" }}
+        cancelText="取消"
+        destroyOnClose
+        onCancel={() => {
+          setRiskModalOpen(false);
+          setPendingPayload(null);
+          setRiskVerdict(null);
+        }}
+        onOk={confirmRiskOverride}
+      >
+        <Alert
+          type={riskVerdict?.level === "BLOCK" ? "error" : "warning"}
+          showIcon
+          message={riskVerdict?.message}
+          className="!mb-3"
+        />
+        {riskVerdict?.in_watchlist && (
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            已观察 {riskVerdict.cooling_days?.toFixed(1)} 天，还需 {riskVerdict.days_remaining?.toFixed(1)} 天。
+          </Text>
+        )}
+        {riskVerdict?.level === "BLOCK" ? (
+          <Input.TextArea
+            className="mt-3"
+            rows={3}
+            placeholder="覆盖理由（必填，将进入 T+30 复盘）"
+            value={overrideReason}
+            onChange={(e) => setOverrideReason(e.target.value)}
+          />
+        ) : null}
+      </Modal>
     </div>
   );
 }

@@ -1,6 +1,14 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
-import type { ExternalCashFlow, HwmState, RiskDashboard } from "../types";
+import type {
+  DisciplineStats,
+  ExternalCashFlow,
+  HwmState,
+  RiskDashboard,
+  TradeVerdict,
+  WatchItem,
+  WatchItemInput,
+} from "../types";
 
 export interface NewCashFlow {
   accountId: string;
@@ -15,6 +23,8 @@ interface RiskState {
   dashboard: RiskDashboard | null;
   flows: ExternalCashFlow[];
   hwm: HwmState | null;
+  watchlist: WatchItem[];
+  stats: DisciplineStats | null;
   loading: boolean;
   error: string | null;
 
@@ -31,12 +41,19 @@ interface RiskState {
   recordFlow: (payload: NewCashFlow) => Promise<boolean>;
   deleteFlow: (id: string) => Promise<boolean>;
   recalibrate: (reason: string) => Promise<boolean>;
+  fetchWatchlist: () => Promise<void>;
+  addWatchItem: (input: WatchItemInput) => Promise<boolean>;
+  removeWatchItem: (id: string) => Promise<boolean>;
+  fetchStats: () => Promise<void>;
+  precheck: (symbol: string, market: string, action: string) => Promise<TradeVerdict>;
 }
 
 export const useRiskStore = create<RiskState>((set, get) => ({
   dashboard: null,
   flows: [],
   hwm: null,
+  watchlist: [],
+  stats: null,
   loading: false,
   error: null,
 
@@ -135,4 +152,47 @@ export const useRiskStore = create<RiskState>((set, get) => ({
       return false;
     }
   },
+
+  fetchWatchlist: async () => {
+    try {
+      const watchlist = await invoke<WatchItem[]>("get_watchlist");
+      set({ watchlist });
+    } catch (err) {
+      set({ error: String(err) });
+    }
+  },
+
+  addWatchItem: async (input) => {
+    try {
+      await invoke("add_watchlist_item", { input });
+      await Promise.all([get().fetchWatchlist(), get().fetchStats()]);
+      return true;
+    } catch (err) {
+      set({ error: String(err) });
+      return false;
+    }
+  },
+
+  removeWatchItem: async (id) => {
+    try {
+      await invoke("remove_watchlist_item", { id });
+      await Promise.all([get().fetchWatchlist(), get().fetchStats()]);
+      return true;
+    } catch (err) {
+      set({ error: String(err) });
+      return false;
+    }
+  },
+
+  fetchStats: async () => {
+    try {
+      const stats = await invoke<DisciplineStats>("get_discipline_stats");
+      set({ stats });
+    } catch (err) {
+      set({ error: String(err) });
+    }
+  },
+
+  precheck: async (symbol, market, action) =>
+    invoke<TradeVerdict>("precheck_trade", { symbol, market, action }),
 }));

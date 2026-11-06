@@ -2,7 +2,7 @@
 
 > 项目：stock-portfolio-manager（Tauri 2 + Rust + React + SQLite，本地单机）
 > 设计依据：`all_documents.zip` 六份参考材料（风和亚洲理念 / RiskControl / 投资镜子 PIP / 过程即奖励）
-> 版本：v1.1 · 2026-11-07 · 状态：**P0 已实施**（P1–P4 待排期，实施记录见 §16）
+> 版本：v1.2 · 2026-11-07 · 状态：**P0 + P1 已实施**（P2–P4 待排期，实施记录见 §16 / §17）
 
 ---
 
@@ -858,4 +858,61 @@ cashflow::record_external_flow(...)         -> ()              // §7.3 方案 A
 
 ---
 
-*§1–§15 为系统设计；§16 记录 P0 实际落地情况与偏差。文档随实现同步更新。*
+## 17. P1 实施记录（2026-11-07）
+
+### 17.1 交付范围
+
+| 层 | 文件 | 内容 |
+|---|---|---|
+| 模型 | `models/risk.rs` | `WatchItem / WatchItemInput / TradeVerdict / TradeRiskContext / DisciplineRecord / DisciplineStats` 与 `VERDICT_*`、`RULE_COOLING_PERIOD / RULE_UNPLANNED_TRADE` 常量 |
+| 服务 | `services/discipline_service.rs` | 观察列表 CRUD、决策矩阵、留痕、promote、遵守率统计，**8 个单测** |
+| 命令 | `commands/discipline.rs` | `get_watchlist / add_watchlist_item / remove_watchlist_item / precheck_trade / get_discipline_stats`，已注册 |
+| 交易接入 | `commands/transactions.rs` | `create_transaction` 新增可选 `risk_context`，在同一 `BEGIN IMMEDIATE` 事务内复算判定、拒绝、留痕、promote |
+| 前端 | `pages/Risk/index.tsx`、`pages/Transactions/index.tsx`、`stores/riskStore.ts`、`types/index.ts` | 驾驶舱新增「观察列表」Tab（含冷静期遵守率）；交易录入前置校验弹窗（BLOCK 必填理由 / WARN 二次确认） |
+| CSV 兼容 | 5 个 Import*Modal | 显式传 `riskContext: null`，历史导入豁免冷静期 |
+
+### 17.2 决策矩阵落地（与 §6.1 一致）
+
+| 场景 | Verdict | 后端处理 |
+|---|---|---|
+| `SELL` / `PAY` / `OPEN` | PASS | 短路返回，永不拦截 |
+| `BUY` 且已有持仓 | PASS | 加仓自由 |
+| 观察列表未满 7 天 | BLOCK | 必须填覆盖理由，否则整个事务回滚 |
+| 观察列表已满 7 天 | PASS | 记录 `cooling_days` |
+| 无持仓且不在观察列表 | WARN | 前端二次确认，`ack_warning=true` 才放行；后端也校验该标志 |
+| 组合回撤触及熔断线 | BLOCK | 仅对**新开仓**生效，可把 PASS/WARN 升级为 BLOCK |
+
+规则开关与阈值全部从 `risk_rules` 动态读取（COOLING_PERIOD 7 天、UNPLANNED_TRADE、MAX_DRAWDOWN −5%），UI 可调即生效。
+
+### 17.3 与原设计的偏差（均有依据）
+
+| # | 原设计 | 实施 | 理由 |
+|---|---|---|---|
+| 1 | 所有 BUY 都走拦截 | 仅**手动录入**走；CSV/图片导入显式豁免 | 5 个导入弹窗回填的是历史成交，用今天的冷静期拦历史数据没有意义，且会直接破坏批量导入 |
+| 2 | 后端无条件拦截 | `risk_context: Option<TradeRiskContext>`，`None` 跳过校验、`Some` 时在事务内**独立复算** | 兼容导入路径，同时保证手动录入的 BLOCK 无法被前端绕过（不信任前端传的 verdict） |
+| 3 | 熔断期间禁止所有新资金投入 | 熔断只拦**新开仓**（无持仓），已有持仓加仓放行 | 温和策略：避免熔断时连降低平均成本的补仓都被挡住；卖出始终放行 |
+| 4 | 覆盖理由仅 BLOCK 必填 | BLOCK 必填理由；WARN 需 `ack_warning` 二次确认 | WARN 不强制写理由，但必须显式确认，两者都落 `trade_discipline` |
+| 5 | 观察列表重复加入未定义 | `ON CONFLICT` 保留原 `added_at` | 防止「删了重加 / 重新提交」重置冷静期时钟；已有单测覆盖 |
+| 6 | 命令参数由前端传 verdict | 后端在 `create_transaction` 内重算 | `create_transaction` 已持有 `db.conn` 锁并开了事务，所有新函数只接受 `&Connection`，**绝不调用 `build_context(db)`**（std::sync::Mutex 非重入，会死锁） |
+
+### 17.4 验证结果
+
+| 项目 | 结果 |
+|---|---|
+| `cargo test --lib` | **220 passed / 0 failed / 8 ignored**（含新增 8 个决策矩阵单测） |
+| 单测覆盖 | SELL 豁免、加仓放行、非计划 WARN、冷静期 BLOCK 与剩余天数、期满 PASS、熔断升级、规则停用放行、重复加入不重置时钟 |
+| `npx tsc --noEmit` | 零错误 |
+| `npm run build` | 通过 |
+| `check_sql_bindings.py` | 187 处绑定全匹配 |
+| 真实库副本回放 | 观察列表写入 → 冷静期 2/7 天判 BLOCK → 同事务留痕 + promote → 遵守率聚合，全链路通过 |
+
+### 17.5 已知限制与下一步
+
+- **留痕范围**：只有手动录入（传 `riskContext`）的交易才写 `trade_discipline`；历史/CSV 导入不产生纪律记录，因此遵守率的分母是「启用 P1 之后的手动交易」，不是全量交易。
+- **冷静期可绕过**：用户仍可手动「移除观察项后重新加入」来重置时钟（删除会真正删行）。本地单机 + 温和策略下接受此边界；若需强约束，P2 可改为软删除并保留首次 `added_at`。
+- **P2 待做**：LIFO 完整交易配对、时光机 T+30 强制复盘（优先队列取 `override_reason` 非空的记录）、纪律分、投资笔记 + 持仓快照。`investment_memos` / `trade_reviews` 表已建好但仍未接线。
+- **运行提示**：改的是 Rust 后端，需 `npm run tauri dev` 重新编译后生效。
+
+---
+
+*§1–§15 为系统设计；§16 记录 P0、§17 记录 P1 的实际落地情况与偏差。文档随实现同步更新。*

@@ -27,6 +27,7 @@ import type {
   RiskEvent,
   RiskRuleConfig,
   RiskSeverity,
+  WatchItem,
 } from "../../types";
 
 const { Title, Text } = Typography;
@@ -110,12 +111,26 @@ export default function RiskPage() {
     recordFlow,
     deleteFlow,
     recalibrate,
+    watchlist,
+    stats,
+    fetchWatchlist,
+    addWatchItem,
+    removeWatchItem,
+    fetchStats,
   } = useRiskStore();
 
   const [accounts, setAccounts] = useState<Array<{ id: string; name: string }>>([]);
   const [draft, setDraft] = useState<Record<string, number | null>>({});
   const [calOpen, setCalOpen] = useState(false);
   const [calReason, setCalReason] = useState("");
+  const [watchForm, setWatchForm] = useState({
+    symbol: "",
+    name: "",
+    market: "US",
+    thesis: "",
+    targetPrice: null as number | null,
+    addedAt: dayjs().format("YYYY-MM-DD"),
+  });
   const [form, setForm] = useState({
     accountId: "",
     currency: "USD",
@@ -129,6 +144,8 @@ export default function RiskPage() {
     fetchDashboard();
     fetchFlows();
     fetchHwm();
+    fetchWatchlist();
+    fetchStats();
     invoke<Array<{ id: string; name: string }>>("get_accounts")
       .then((list) => {
         setAccounts(list);
@@ -278,6 +295,88 @@ export default function RiskPage() {
     },
   ];
 
+  const watchColumns = [
+    {
+      title: "标的",
+      key: "symbol",
+      width: 140,
+      render: (_: unknown, r: WatchItem) => (
+        <div>
+          <strong>{r.symbol}</strong>
+          {r.name && <div style={{ fontSize: 11, color: "#8c8c8c" }}>{r.name}</div>}
+        </div>
+      ),
+    },
+    { title: "市场", dataIndex: "market", key: "market", width: 70 },
+    {
+      title: "加入",
+      dataIndex: "added_at",
+      key: "added_at",
+      width: 100,
+      render: (v: string) => v.slice(0, 10),
+    },
+    {
+      title: "已观察",
+      key: "cooling",
+      width: 90,
+      render: (_: unknown, r: WatchItem) => `${r.cooling_days.toFixed(1)} 天`,
+    },
+    {
+      title: "状态",
+      key: "eligible",
+      width: 130,
+      render: (_: unknown, r: WatchItem) =>
+        r.eligible ? (
+          <Tag color="success">可建仓</Tag>
+        ) : (
+          <Tag color="orange">还需 {r.days_remaining.toFixed(1)} 天</Tag>
+        ),
+    },
+    {
+      title: "逻辑",
+      dataIndex: "thesis",
+      key: "thesis",
+      render: (v: string | null) => v ?? "-",
+    },
+    {
+      title: "",
+      key: "action",
+      width: 70,
+      render: (_: unknown, r: WatchItem) => (
+        <Popconfirm
+          title="移出观察列表？"
+          onConfirm={() => removeWatchItem(r.id)}
+          okText="移除"
+          cancelText="取消"
+        >
+          <Button size="small" type="link" danger>移除</Button>
+        </Popconfirm>
+      ),
+    },
+  ];
+
+  const submitWatch = async () => {
+    if (!watchForm.symbol.trim()) {
+      message.warning("请填写标的代码");
+      return;
+    }
+    const ok = await addWatchItem({
+      symbol: watchForm.symbol.trim().toUpperCase(),
+      name: watchForm.name.trim() || null,
+      market: watchForm.market,
+      currency: watchForm.market === "US" ? "USD" : watchForm.market === "HK" ? "HKD" : "CNY",
+      thesis: watchForm.thesis.trim() || null,
+      target_price: watchForm.targetPrice,
+      added_at: watchForm.addedAt,
+    });
+    if (ok) {
+      message.success("已加入观察列表");
+      setWatchForm((f) => ({ ...f, symbol: "", name: "", thesis: "", targetPrice: null }));
+    } else {
+      message.error(useRiskStore.getState().error ?? "添加失败");
+    }
+  };
+
   const submitFlow = async () => {
     if (!form.accountId || form.amount <= 0) {
       message.warning("请选择账户并填写正数金额");
@@ -379,6 +478,73 @@ export default function RiskPage() {
                     size="small"
                     pagination={false}
                     className="mt-2"
+                  />
+                </div>
+              ),
+            },
+            {
+              key: "watchlist",
+              label: `观察列表${watchlist.length ? ` (${watchlist.length})` : ""}`,
+              children: (
+                <div>
+                  <div className="flex flex-wrap items-center gap-2 mb-3">
+                    <Input
+                      size="small"
+                      style={{ width: 110 }}
+                      placeholder="代码"
+                      value={watchForm.symbol}
+                      onChange={(e) => setWatchForm((f) => ({ ...f, symbol: e.target.value }))}
+                      onPressEnter={submitWatch}
+                    />
+                    <Input
+                      size="small"
+                      style={{ width: 130 }}
+                      placeholder="名称（选填）"
+                      value={watchForm.name}
+                      onChange={(e) => setWatchForm((f) => ({ ...f, name: e.target.value }))}
+                    />
+                    <Select
+                      size="small"
+                      style={{ width: 85 }}
+                      value={watchForm.market}
+                      options={[{ value: "US", label: "美股" }, { value: "HK", label: "港股" }, { value: "CN", label: "A股" }]}
+                      onChange={(v) => setWatchForm((f) => ({ ...f, market: v }))}
+                    />
+                    <Input
+                      size="small"
+                      style={{ width: 190 }}
+                      placeholder="买入逻辑（选填）"
+                      value={watchForm.thesis}
+                      onChange={(e) => setWatchForm((f) => ({ ...f, thesis: e.target.value }))}
+                    />
+                    <InputNumber
+                      size="small"
+                      style={{ width: 105 }}
+                      placeholder="目标价"
+                      min={0}
+                      value={watchForm.targetPrice}
+                      onChange={(v) => setWatchForm((f) => ({ ...f, targetPrice: v }))}
+                    />
+                    <DatePicker
+                      size="small"
+                      value={dayjs(watchForm.addedAt)}
+                      allowClear={false}
+                      onChange={(v) => setWatchForm((f) => ({ ...f, addedAt: v?.format("YYYY-MM-DD") ?? f.addedAt }))}
+                    />
+                    <Button size="small" type="primary" onClick={submitWatch}>加入</Button>
+                    {stats && stats.total > 0 && (
+                      <Text type="secondary" style={{ fontSize: 12, marginLeft: "auto" }}>
+                        冷静期遵守率 {stats.compliance_rate.toFixed(0)}% · 覆盖 {stats.overridden} 次 · 非计划 {stats.unplanned} 次
+                      </Text>
+                    )}
+                  </div>
+                  <Table
+                    dataSource={watchlist}
+                    columns={watchColumns}
+                    rowKey="id"
+                    size="small"
+                    pagination={false}
+                    locale={{ emptyText: "暂无观察标的" }}
                   />
                 </div>
               ),

@@ -443,6 +443,7 @@ export default function ImportFromMoomooCsvModal({
           commission: r.commission,
           currency: rowCurrency,
           tradedAt: new Date(r.traded_at).toISOString(),
+          riskContext: null,
         });
         success++;
         updateRow(r.key, { importOk: true, importError: undefined });

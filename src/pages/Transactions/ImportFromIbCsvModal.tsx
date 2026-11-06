@@ -487,6 +487,7 @@ export default function ImportFromIbCsvModal({
           commission: r.commission,
           currency,
           tradedAt: new Date(r.traded_at).toISOString(),
+          riskContext: null,
         });
         success++;
         updateRow(r.key, { importOk: true, importError: undefined });

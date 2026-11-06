@@ -277,6 +277,11 @@ pub fn run() {
             commands::cashflow::list_external_flows,
             commands::cashflow::record_external_flow,
             commands::cashflow::delete_external_flow,
+            commands::discipline::get_watchlist,
+            commands::discipline::add_watchlist_item,
+            commands::discipline::remove_watchlist_item,
+            commands::discipline::precheck_trade,
+            commands::discipline::get_discipline_stats,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

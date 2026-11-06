@@ -403,6 +403,7 @@ export default function ImportFromThsCsvModal({
           currency: "CNY",
           tradedAt: new Date(r.traded_at).toISOString(),
           notes: r.notes ?? null,
+          riskContext: null,
         });
         success++;
         updateRow(r.key, { importOk: true, importError: undefined });
