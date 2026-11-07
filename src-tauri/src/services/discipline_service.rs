@@ -117,18 +117,19 @@ fn row_to_watch(r: &rusqlite::Row<'_>, cooling_days_threshold: f64) -> rusqlite:
     })
 }
 
-const WATCH_SELECT: &str = "SELECT id, symbol, name, market, currency, added_at, thesis,
+const WATCH_LIST: &str = "SELECT id, symbol, name, market, currency, added_at, thesis,
+                                 target_price, status, promoted_at, created_at, updated_at
+                          FROM watchlist
+                          WHERE status = 'watching' AND deleted_at IS NULL
+                          ORDER BY added_at DESC";
+const WATCH_BY_KEY: &str = "SELECT id, symbol, name, market, currency, added_at, thesis,
                                    target_price, status, promoted_at, created_at, updated_at
-                            FROM watchlist";
+                            FROM watchlist
+                            WHERE UPPER(symbol) = UPPER(?1) AND market = ?2";
 
 pub fn list_watchlist(conn: &Connection) -> Result<Vec<WatchItem>, String> {
     let threshold = cooling_threshold(conn)?;
-    let mut stmt = conn
-        .prepare(&format!(
-            "{} WHERE status = 'watching' ORDER BY added_at DESC",
-            WATCH_SELECT
-        ))
-        .map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(WATCH_LIST).map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |r| row_to_watch(r, threshold))
         .map_err(|e| e.to_string())?
@@ -138,7 +139,9 @@ pub fn list_watchlist(conn: &Connection) -> Result<Vec<WatchItem>, String> {
 }
 
 /// Add (or refresh) a watchlist entry. `added_at` is deliberately preserved on
-/// conflict: re-adding a symbol must NOT reset its cooling-off clock.
+/// conflict: re-adding a symbol must NOT reset its cooling-off clock. A removal
+/// is a soft delete, so UNIQUE(symbol, market) still resolves to the original
+/// row and its original `added_at` (see optimisation #8).
 pub fn add_watch_item(conn: &Connection, input: &WatchItemInput) -> Result<WatchItem, String> {
     let symbol = input.symbol.trim().to_uppercase();
     if symbol.is_empty() {
@@ -171,6 +174,9 @@ pub fn add_watch_item(conn: &Connection, input: &WatchItemInput) -> Result<Watch
             name = excluded.name,
             thesis = excluded.thesis,
             target_price = excluded.target_price,
+            status = 'watching',
+            promoted_at = NULL,
+            deleted_at = NULL,
             updated_at = excluded.updated_at",
         params![
             id,
@@ -188,16 +194,23 @@ pub fn add_watch_item(conn: &Connection, input: &WatchItemInput) -> Result<Watch
 
     let threshold = cooling_threshold(conn)?;
     conn.query_row(
-        &format!("{} WHERE UPPER(symbol) = UPPER(?1) AND market = ?2", WATCH_SELECT),
+        WATCH_BY_KEY,
         params![symbol, market],
         |r| row_to_watch(r, threshold),
     )
     .map_err(|e| e.to_string())
 }
 
+/// Soft delete: keep the row (and therefore the original `added_at`) so the
+/// cooling-off clock cannot be restarted by removing and re-adding a symbol.
 pub fn remove_watch_item(conn: &Connection, id: &str) -> Result<(), String> {
-    conn.execute("DELETE FROM watchlist WHERE id = ?1", params![id])
-        .map_err(|e| e.to_string())?;
+    let now = now_utc_str();
+    conn.execute(
+        "UPDATE watchlist SET status = 'removed', deleted_at = ?2, updated_at = ?2
+         WHERE id = ?1 AND deleted_at IS NULL",
+        params![id, now],
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -241,7 +254,8 @@ pub fn evaluate_trade_intent(
     let watch: Option<(String, String)> = conn
         .query_row(
             "SELECT id, added_at FROM watchlist
-             WHERE UPPER(symbol) = UPPER(?1) AND market = ?2 AND status = 'watching'",
+             WHERE UPPER(symbol) = UPPER(?1) AND market = ?2
+               AND status = 'watching' AND deleted_at IS NULL",
             params![symbol, market],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -346,7 +360,8 @@ pub fn promote_watch_item(conn: &Connection, symbol: &str, market: &str) -> Resu
     let now = now_utc_str();
     conn.execute(
         "UPDATE watchlist SET status = 'promoted', promoted_at = ?3, updated_at = ?3
-         WHERE UPPER(symbol) = UPPER(?1) AND market = ?2 AND status = 'watching'",
+         WHERE UPPER(symbol) = UPPER(?1) AND market = ?2
+           AND status = 'watching' AND deleted_at IS NULL",
         params![symbol, market, now],
     )
     .map_err(|e| e.to_string())?;
@@ -368,7 +383,8 @@ mod tests {
                 id TEXT PRIMARY KEY, symbol TEXT NOT NULL, name TEXT, market TEXT NOT NULL,
                 currency TEXT, added_at TEXT NOT NULL, thesis TEXT, target_price REAL,
                 status TEXT NOT NULL DEFAULT 'watching', promoted_at TEXT,
-                created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(symbol, market));
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT,
+                UNIQUE(symbol, market));
              CREATE TABLE holdings (
                 id TEXT PRIMARY KEY, account_id TEXT, symbol TEXT, shares REAL);
              CREATE TABLE portfolio_hwm (
@@ -485,6 +501,30 @@ mod tests {
         .unwrap();
         let v = evaluate_trade_intent(&conn, "AMD", "US", "BUY").unwrap();
         assert_eq!(v.level, VERDICT_PASS);
+    }
+
+    #[test]
+    fn remove_then_readd_keeps_original_cooling_clock() {
+        let conn = test_conn();
+        add_watch_item(&conn, &watch("SOL", days_ago(2))).unwrap();
+        let first = conn
+            .query_row("SELECT id, added_at FROM watchlist WHERE symbol='SOL'", [],
+                       |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .unwrap();
+        remove_watch_item(&conn, &first.0).unwrap();
+        assert_eq!(list_watchlist(&conn).unwrap().len(), 0, "移除后不再展示");
+        // A back-dated re-add must NOT win over the original added_at.
+        add_watch_item(&conn, &watch("SOL", days_ago(0))).unwrap();
+        let row = conn
+            .query_row("SELECT added_at, status, deleted_at FROM watchlist WHERE symbol='SOL'", [],
+                       |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?,
+                              r.get::<_, Option<String>>(2)?)))
+            .unwrap();
+        assert_eq!(row.0, first.1, "首次 added_at 必须保留");
+        assert_eq!(row.1, "watching");
+        assert!(row.2.is_none(), "软删除标记已清除");
+        let v = evaluate_trade_intent(&conn, "SOL", "US", "BUY").unwrap();
+        assert_eq!(v.level, VERDICT_BLOCK, "冷静期不能被移除→重加绕过");
     }
 
     #[test]

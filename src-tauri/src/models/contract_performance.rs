@@ -29,6 +29,9 @@ pub struct ContractPerformanceSummary {
 }
 
 /// 合约状态（用于 backfill 计算）
+/// Full backfill state snapshot; some fields are kept for round-trip fidelity
+/// even though the current computation path does not read them.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ContractState {
     pub id: String,
@@ -46,6 +49,7 @@ pub struct ContractState {
 }
 
 /// 历史记录行（从 crypto_contract_history 表读取）
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct HistoryRow {
     pub contract_id: String,
@@ -68,6 +72,7 @@ pub struct HistoryRow {
 }
 
 /// 已平仓合约摘要（用于重建生命周期）
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ClosedContractSummary {
     pub contract_id: String,

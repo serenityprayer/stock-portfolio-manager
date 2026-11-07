@@ -5,7 +5,6 @@ use chrono::Utc;
 use reqwest::header;
 use std::collections::HashMap;
 use std::time::Duration;
-use tauri::State;
 
 // ── Crypto quotes (Gate.io → Binance fallback) ───────────────────────────
 
@@ -139,14 +138,18 @@ async fn fetch_from_gateio(symbol: &str) -> Result<StockQuote, String> {
     })
 }
 
-/// Binance 24hr ticker response
+/// Binance 24hr ticker response. Only the fields actually consumed are kept;
+/// serde ignores the rest by default.
 #[derive(Debug, serde::Deserialize)]
 struct BinanceTicker {
-    symbol: String,
-    lastPrice: String,
-    priceChangePercent: String,
-    highPrice: String,
-    lowPrice: String,
+    #[serde(rename = "lastPrice")]
+    last_price: String,
+    #[serde(rename = "priceChangePercent")]
+    price_change_percent: String,
+    #[serde(rename = "highPrice")]
+    high_price: String,
+    #[serde(rename = "lowPrice")]
+    low_price: String,
     volume: String,
 }
 
@@ -194,10 +197,10 @@ async fn fetch_from_binance(symbol: &str) -> Result<StockQuote, String> {
             )
         })?;
 
-    let current_price = t.lastPrice.parse::<f64>().unwrap_or(0.0);
-    let change_percent = t.priceChangePercent.parse::<f64>().unwrap_or(0.0);
-    let high = t.highPrice.parse::<f64>().unwrap_or(current_price);
-    let low = t.lowPrice.parse::<f64>().unwrap_or(current_price);
+    let current_price = t.last_price.parse::<f64>().unwrap_or(0.0);
+    let change_percent = t.price_change_percent.parse::<f64>().unwrap_or(0.0);
+    let high = t.high_price.parse::<f64>().unwrap_or(current_price);
+    let low = t.low_price.parse::<f64>().unwrap_or(current_price);
     let volume = t.volume.parse::<f64>().unwrap_or(0.0) as u64;
 
     let previous_close = if change_percent != 0.0 && current_price > 0.0 {

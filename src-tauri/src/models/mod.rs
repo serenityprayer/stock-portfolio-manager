@@ -23,7 +23,6 @@ pub mod valuation;
 
 pub use account::Account;
 pub use category::Category;
-pub use contract_performance::{ContractPerformanceSummary, ContractReturnPoint};
 pub use dashboard::{DashboardSummary, HoldingDetail};
 pub use holding::Holding;
 pub use quote::{DailyHoldingSnapshot, DailyPortfolioValue, ExchangeRates, HoldingWithQuote, StockQuote};

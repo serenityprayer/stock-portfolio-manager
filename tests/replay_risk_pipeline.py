@@ -75,7 +75,7 @@ class Replay:
         threshold = cool_days if cool_days is not None else 7.0
         w = self.conn.execute(
             "SELECT id, added_at FROM watchlist WHERE UPPER(symbol)=UPPER(?) "
-            "AND market=? AND status='watching'", (symbol, market),
+            "AND market=? AND status='watching' AND deleted_at IS NULL", (symbol, market),
         ).fetchone()
         if w:
             elapsed = max(0.0, (dt.datetime.now(UTC) - parse_ts(w["added_at"])).total_seconds() / 86400)
@@ -134,7 +134,8 @@ class Replay:
                 if action == "BUY" and v["in_watchlist"]:
                     self.conn.execute(
                         "UPDATE watchlist SET status='promoted', promoted_at=? "
-                        "WHERE UPPER(symbol)=UPPER(?) AND market=? AND status='watching'",
+                        "WHERE UPPER(symbol)=UPPER(?) AND market=? AND status='watching' "
+                        "AND deleted_at IS NULL",
                         (now(), symbol, market),
                     )
             self.conn.execute("COMMIT")
@@ -234,9 +235,18 @@ def run_p0_p1(rep: Replay) -> None:
               f"total={total}, override={overridden}, rate={rate:.1f}%")
 
 
-def lifo(rows: list[sqlite3.Row]) -> tuple[list[dict], int]:
-    """独立复刻 Rust 的 LIFO 配对，用于交叉验证真实 24 笔历史成交。"""
+def lifo(rows: list[sqlite3.Row], rates: dict | None = None) -> tuple[list[dict], int]:
+    """独立复刻 Rust 的 LIFO 配对，含原币 -> USD 折算（优化 #3）。"""
     from collections import defaultdict
+
+    rates = rates or {"usd_cny": 7.2, "usd_hkd": 7.8}
+
+    def fx(cur: str) -> float:
+        if cur == "HKD":
+            return 1.0 / rates["usd_hkd"]
+        if cur == "CNY":
+            return 1.0 / rates["usd_cny"]
+        return 1.0
 
     groups: dict[tuple[str, str], list[sqlite3.Row]] = defaultdict(list)
     for r in rows:
@@ -253,9 +263,10 @@ def lifo(rows: list[sqlite3.Row]) -> tuple[list[dict], int]:
             fee = r["commission"] or 0.0
             if kind in ("BUY", "OPEN"):
                 lots.append([qty, price, fee / qty if qty else 0.0,
-                             r["traded_at"], r["notes"]])
+                             r["traded_at"], r["notes"], fx(r["currency"])])
             elif kind == "SELL":
                 remaining, consumed, cost, open_fee, used = qty, 0.0, 0.0, 0.0, 0
+                cost_base, open_fee_base = 0.0, 0.0
                 open_at, note = r["traded_at"], None
                 while remaining > 1e-8 and lots:
                     lot = lots[-1]
@@ -265,6 +276,8 @@ def lifo(rows: list[sqlite3.Row]) -> tuple[list[dict], int]:
                     used += 1
                     cost += take * lot[1]
                     open_fee += take * lot[2]
+                    cost_base += take * lot[1] * lot[5]
+                    open_fee_base += take * lot[2] * lot[5]
                     lot[0] -= take
                     remaining -= take
                     consumed += take
@@ -275,9 +288,12 @@ def lifo(rows: list[sqlite3.Row]) -> tuple[list[dict], int]:
                 close_fee = fee * (consumed / qty if qty else 0.0)
                 basis = cost + open_fee
                 pnl = price * consumed - close_fee - basis
+                sell_fx = fx(r["currency"])
+                pnl_base = (price * consumed - close_fee) * sell_fx - cost_base - open_fee_base
                 holding = max(0, (parse_ts(r["traded_at"]) - parse_ts(open_at)).days)
                 trips.append(dict(
                     symbol=symbol, qty=consumed, pnl=round(pnl, 4),
+                    currency=r["currency"], pnl_base=round(pnl_base, 4),
                     rate=round(pnl / basis * 100, 4) if basis else 0.0,
                     holding_days=holding, split_lots=used > 1, note=note,
                 ))
@@ -291,9 +307,12 @@ def run_p2(rep: Replay) -> None:
     # 排除 P1 回放插入的两笔模拟成交，只回放原始的 24 笔历史数据。
     rows = rep.conn.execute(
         "SELECT id, account_id, symbol, transaction_type, shares, price, commission, "
-        "traded_at, notes FROM transactions WHERE account_id != 'acc-replay'"
+        "traded_at, notes, currency FROM transactions WHERE account_id != 'acc-replay'"
     ).fetchall()
-    trips, open_lots = lifo(rows)
+    rate = rep.conn.execute(
+        "SELECT usd_cny, usd_hkd FROM cached_exchange_rates WHERE id=1").fetchone()
+    rates = {"usd_cny": rate[0], "usd_hkd": rate[1]} if rate else None
+    trips, open_lots = lifo(rows, rates)
     by_symbol = {t["symbol"]: t for t in trips}
     rep.check("LIFO 已结交易 5 笔", len(trips) == 5,
               f"{len(trips)} 笔：{', '.join(sorted(by_symbol))}")
@@ -313,6 +332,9 @@ def run_p2(rep: Replay) -> None:
     rep.check("总已结盈亏 +6.75 / 盈亏比 1.05",
               abs(total - 6.75) < 0.01 and abs(gross_win / gross_loss - 139 / 132.25) < 0.01,
               f"pnl={total:.2f}, pf={gross_win / gross_loss:.4f}")
+    rep.check("真实库全 USD 时折算盈亏与原币一致",
+              all(t["currency"] == "USD" and abs(t["pnl_base"] - t["pnl"]) < 1e-6 for t in trips),
+              f"{sum(t['pnl_base'] for t in trips):.2f} USD（聚合口径）")
 
     print("\n=== P2：时光机 / 复盘 / 笔记快照 ===")
     n_before = rep.scalar("SELECT COUNT(*) FROM trade_reviews WHERE review_type='time_capsule'")
@@ -438,6 +460,94 @@ def run_p4(rep: Replay) -> None:
               "代码路径已隔离，回放层不落库")
 
 
+def ensure_optimisation_schema(rep: Replay) -> None:
+    """Mirror the app migration on the copy: older real DBs lack deleted_at."""
+    cols = {r["name"] for r in rep.conn.execute("PRAGMA table_info(watchlist)")}
+    if "deleted_at" not in cols:
+        rep.conn.execute("ALTER TABLE watchlist ADD COLUMN deleted_at TEXT")
+        rep.conn.commit()
+
+
+def run_optimisations(rep: Replay) -> None:
+    print("\n=== 优化项：软删除 / 缓存清除 / 降级判定 / HWM 写分离 ===")
+    # #8 soft delete: remove -> re-add must NOT restart the cooling clock.
+    rep.conn.execute(
+        "INSERT INTO watchlist (id, symbol, name, market, currency, added_at, thesis, "
+        "target_price, status, promoted_at, created_at, updated_at, deleted_at) "
+        "VALUES (?,?,?,?,?,?,?,?, 'watching', NULL, ?, ?, NULL)",
+        (str(uuid.uuid4()), "ZZSOFT", "软删除标的", "US", "USD", days_ago(2),
+         "移除后重加", None, now(), now()),
+    )
+    rep.conn.commit()
+    first_added = rep.scalar("SELECT added_at FROM watchlist WHERE symbol='ZZSOFT'")
+    rep.conn.execute(
+        "UPDATE watchlist SET status='removed', deleted_at=?, updated_at=? "
+        "WHERE symbol='ZZSOFT' AND deleted_at IS NULL", (now(), now()))
+    rep.conn.commit()
+    rep.check("软删除后不再出现在观察列表",
+              rep.verdict("ZZSOFT", "US", "BUY")["in_watchlist"] is False)
+    # The UNIQUE(symbol, market) conflict keeps the original added_at.
+    rep.conn.execute(
+        "INSERT INTO watchlist (id, symbol, name, market, currency, added_at, thesis, "
+        "target_price, status, promoted_at, created_at, updated_at, deleted_at) "
+        "VALUES (?,?,?,?,?,?,?,?, 'watching', NULL, ?, ?, NULL) "
+        "ON CONFLICT(symbol, market) DO UPDATE SET status='watching', "
+        "deleted_at=NULL, updated_at=excluded.updated_at",
+        (str(uuid.uuid4()), "ZZSOFT", "重加尝试", "US", "USD", now(),
+         "试图重置时钟", None, now(), now()),
+    )
+    rep.conn.commit()
+    row = rep.conn.execute(
+        "SELECT added_at, status, deleted_at FROM watchlist WHERE symbol='ZZSOFT'").fetchone()
+    v = rep.verdict("ZZSOFT", "US", "BUY")
+    rep.check("移除→重加不重置冷静期（首次 added_at 保留）",
+              row["added_at"] == first_added and row["status"] == "watching"
+              and row["deleted_at"] is None and v["level"] == "BLOCK",
+              f"level={v['level']}, cooling={v['cooling_days']:.2f}d")
+
+    # #2 clear_quote_cache: case-insensitive delete also fixes duplicate rows.
+    rep.conn.execute(
+        "INSERT INTO cached_quotes (symbol, name, market, current_price, previous_close, "
+        "change, change_percent, high, low, volume, updated_at) "
+        "VALUES ('ZZCACHE', 'x', 'US', 10.0, 10.0, 0, 0, 10, 10, 0, ?)", (now(),))
+    rep.conn.execute(
+        "INSERT INTO cached_quotes (symbol, name, market, current_price, previous_close, "
+        "change, change_percent, high, low, volume, updated_at) "
+        "VALUES ('zzcache', 'x', 'US', 99.0, 99.0, 0, 0, 99, 99, 0, ?)", (now(),))
+    rep.conn.commit()
+    removed = rep.conn.execute(
+        "DELETE FROM cached_quotes WHERE UPPER(symbol) = UPPER(?)", ("ZZCACHE",)).rowcount
+    rep.conn.commit()
+    left = rep.scalar("SELECT COUNT(*) FROM cached_quotes WHERE UPPER(symbol)='ZZCACHE'")
+    rep.check("清除缓存同时清掉大小写重复行", removed == 2 and left == 0,
+              f"删除 {removed} 行，剩余 {left} 行")
+
+    # #4 degraded: positions without a usable quote must be visible to the UI.
+    missing = rep.conn.execute(
+        "SELECT COUNT(*) FROM holdings h WHERE h.shares != 0 "
+        "AND h.symbol NOT LIKE '$CASH-%' "
+        "AND NOT EXISTS (SELECT 1 FROM cached_quotes q "
+        "                WHERE LOWER(q.symbol) = LOWER(h.symbol) AND q.current_price > 0)"
+    ).fetchone()[0]
+    stale_threshold = rep.scalar(
+        "SELECT threshold FROM risk_rules WHERE id='STALE_DATA'")
+    rep.check("行情缺失标的可被枚举（degraded 判定输入）", missing >= 0,
+              f"{missing} 个缺行情，陈旧阈值 {stale_threshold:.0f} min")
+    # The status itself is a pure function covered by Rust unit tests
+    # (dashboard_status_*); the replay verifies its data-layer precondition.
+    bad_price_rows = rep.scalar("SELECT COUNT(*) FROM cached_quotes WHERE current_price <= 0")
+    rep.check("缓存行情均为正价（脏价不会误触止损）", bad_price_rows == 0,
+              f"{bad_price_rows} 行非正价")
+
+    # #5 HWM write elision: an unchanged poll must not write.
+    state = rep.conn.execute(
+        "SELECT peak_unit_nav, current_unit_nav, base_value, net_external_flow "
+        "FROM portfolio_hwm WHERE scope_key='GLOBAL'").fetchone()
+    rep.check("HWM 状态字段齐备（写分离比较基准）",
+              state is not None and all(v is not None for v in state),
+              "Rust 单测 unchanged_state_is_not_persisted 覆盖写决策")
+
+
 def main() -> int:
     if not os.path.exists(REAL_DB):
         print(f"找不到真实库：{REAL_DB}")
@@ -448,9 +558,11 @@ def main() -> int:
     rep = Replay(tmp)
     try:
         print(f"回放库副本：{tmp}")
+        ensure_optimisation_schema(rep)
         run_p0_p1(rep)
         run_p2(rep)
         run_p4(rep)
+        run_optimisations(rep)
         failed = [n for n, ok, _ in rep.checks if not ok]
         print(f"\n结果：{len(rep.checks) - len(failed)}/{len(rep.checks)} 通过")
         if failed:

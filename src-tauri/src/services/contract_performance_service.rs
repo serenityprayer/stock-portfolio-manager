@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use rusqlite::Connection;
-use chrono::{NaiveDate, Datelike};
+use chrono::NaiveDate;
 use crate::db::Database;
 use crate::models::contract_performance::*;
 

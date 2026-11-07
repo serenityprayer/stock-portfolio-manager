@@ -52,6 +52,7 @@ pub struct TxRow {
     pub commission: f64,
     pub traded_at: String,
     pub notes: Option<String>,
+    pub currency: String,
 }
 
 #[derive(Debug, Clone)]
@@ -59,16 +60,28 @@ struct Lot {
     shares: f64,
     price: f64,
     commission_per_share: f64,
+    /// Native currency -> base currency factor captured for the open leg.
+    fx: f64,
     open_at: DateTime<Utc>,
     open_at_str: String,
     note: Option<String>,
+}
+
+/// Native currency -> USD factor used for every aggregate statistic.
+/// `ExchangeRates` holds the latest cached rates, not per-trade-day history;
+/// the UI states this limitation via `RoundTripStats.fx_note`.
+pub fn fx_to_base(currency: &str, rates: &ExchangeRates) -> f64 {
+    let v = convert_currency(1.0, currency, BASE_CURRENCY, rates);
+    if v.is_finite() && v > 0.0 { v } else { 1.0 }
 }
 
 /// LIFO pairing, grouped by (account, symbol). `OPEN` is an opening balance:
 /// it participates in pairing but produces no cash flow of its own.
 /// A single SELL that spans several lots yields ONE round trip with a
 /// quantity-weighted average open price; `split_lots` records the split.
-pub fn pair_round_trips(txs: &[TxRow]) -> (Vec<RoundTrip>, usize) {
+/// Both legs are converted to the base currency so mixed-market portfolios
+/// can be aggregated safely.
+pub fn pair_round_trips(txs: &[TxRow], rates: &ExchangeRates) -> (Vec<RoundTrip>, usize) {
     let mut groups: HashMap<(String, String), Vec<&TxRow>> = HashMap::new();
     for t in txs {
         if !matches!(t.transaction_type.as_str(), "BUY" | "OPEN" | "SELL") {
@@ -102,6 +115,7 @@ pub fn pair_round_trips(txs: &[TxRow]) -> (Vec<RoundTrip>, usize) {
                         shares: tx.shares,
                         price: tx.price,
                         commission_per_share: tx.commission / tx.shares,
+                        fx: fx_to_base(&tx.currency, rates),
                         open_at: parse_ts(&tx.traded_at),
                         open_at_str: tx.traded_at.clone(),
                         note: tx.notes.clone(),
@@ -112,6 +126,8 @@ pub fn pair_round_trips(txs: &[TxRow]) -> (Vec<RoundTrip>, usize) {
                     let mut consumed = 0.0f64;
                     let mut open_cost = 0.0f64;
                     let mut open_commission = 0.0f64;
+                    let mut open_cost_base = 0.0f64;
+                    let mut open_commission_base = 0.0f64;
                     let mut lots_used = 0usize;
                     let mut open_at: Option<DateTime<Utc>> = None;
                     let mut open_at_str = tx.traded_at.clone();
@@ -132,6 +148,8 @@ pub fn pair_round_trips(txs: &[TxRow]) -> (Vec<RoundTrip>, usize) {
                         lots_used += 1;
                         open_cost += take * lot.price;
                         open_commission += take * lot.commission_per_share;
+                        open_cost_base += take * lot.price * lot.fx;
+                        open_commission_base += take * lot.commission_per_share * lot.fx;
                         lot.shares -= take;
                         remaining -= take;
                         consumed += take;
@@ -146,6 +164,9 @@ pub fn pair_round_trips(txs: &[TxRow]) -> (Vec<RoundTrip>, usize) {
                     let cost_basis = open_cost + open_commission;
                     let proceeds = tx.price * consumed;
                     let pnl = proceeds - close_commission - cost_basis;
+                    let sell_fx = fx_to_base(&tx.currency, rates);
+                    let pnl_base = proceeds * sell_fx - close_commission * sell_fx
+                        - open_cost_base - open_commission_base;
                     let return_rate = if cost_basis > EPS {
                         pnl / cost_basis * 100.0
                     } else {
@@ -157,6 +178,7 @@ pub fn pair_round_trips(txs: &[TxRow]) -> (Vec<RoundTrip>, usize) {
                     out.push(RoundTrip {
                         symbol: tx.symbol.to_uppercase(),
                         market: tx.market.clone(),
+                        currency: tx.currency.clone(),
                         open_at: open_at_str,
                         close_at: tx.traded_at.clone(),
                         holding_days,
@@ -164,6 +186,7 @@ pub fn pair_round_trips(txs: &[TxRow]) -> (Vec<RoundTrip>, usize) {
                         avg_open_price: open_cost / consumed,
                         avg_close_price: tx.price,
                         realized_pnl: pnl,
+                        realized_pnl_base: pnl_base,
                         return_rate,
                         open_note,
                         close_note: tx.notes.clone(),
@@ -181,10 +204,10 @@ pub fn pair_round_trips(txs: &[TxRow]) -> (Vec<RoundTrip>, usize) {
 }
 
 pub fn summarize(trips: &[RoundTrip], open_lot_count: usize) -> RoundTripStats {
-    let wins: Vec<&RoundTrip> = trips.iter().filter(|t| t.realized_pnl > 0.0).collect();
-    let losses: Vec<&RoundTrip> = trips.iter().filter(|t| t.realized_pnl < 0.0).collect();
-    let gross_profit: f64 = wins.iter().map(|t| t.realized_pnl).sum();
-    let gross_loss: f64 = losses.iter().map(|t| t.realized_pnl.abs()).sum();
+    let wins: Vec<&RoundTrip> = trips.iter().filter(|t| t.realized_pnl_base > 0.0).collect();
+    let losses: Vec<&RoundTrip> = trips.iter().filter(|t| t.realized_pnl_base < 0.0).collect();
+    let gross_profit: f64 = wins.iter().map(|t| t.realized_pnl_base).sum();
+    let gross_loss: f64 = losses.iter().map(|t| t.realized_pnl_base.abs()).sum();
     let profit_factor = if gross_loss > EPS {
         Some(gross_profit / gross_loss)
     } else if gross_profit > EPS {
@@ -203,6 +226,15 @@ pub fn summarize(trips: &[RoundTrip], open_lot_count: usize) -> RoundTripStats {
         },
         profit_factor,
         total_realized_pnl: trips.iter().map(|t| t.realized_pnl).sum(),
+        total_realized_pnl_base: trips.iter().map(|t| t.realized_pnl_base).sum(),
+        base_currency: BASE_CURRENCY.to_string(),
+        mixed_currency: trips
+            .iter()
+            .map(|t| t.currency.as_str())
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            > 1,
+        fx_note: "按当前缓存汇率折算到 USD；未保留成交日历史汇率".to_string(),
         avg_holding_days: if trips.is_empty() {
             0.0
         } else {
@@ -210,11 +242,19 @@ pub fn summarize(trips: &[RoundTrip], open_lot_count: usize) -> RoundTripStats {
         },
         best_trade: trips
             .iter()
-            .max_by(|a, b| a.realized_pnl.partial_cmp(&b.realized_pnl).unwrap())
+            .max_by(|a, b| {
+                a.realized_pnl_base
+                    .partial_cmp(&b.realized_pnl_base)
+                    .unwrap()
+            })
             .cloned(),
         worst_trade: trips
             .iter()
-            .min_by(|a, b| a.realized_pnl.partial_cmp(&b.realized_pnl).unwrap())
+            .min_by(|a, b| {
+                a.realized_pnl_base
+                    .partial_cmp(&b.realized_pnl_base)
+                    .unwrap()
+            })
             .cloned(),
         open_lot_count,
     }
@@ -227,10 +267,10 @@ pub fn summarize(trips: &[RoundTrip], open_lot_count: usize) -> RoundTripStats {
 pub fn load_transactions(conn: &Connection, symbol: Option<&str>) -> Result<Vec<TxRow>, String> {
     let sql = match symbol {
         Some(_) => "SELECT id, account_id, symbol, market, transaction_type, shares, price,
-                           commission, traded_at, notes FROM transactions
+                           commission, traded_at, notes, currency FROM transactions
                     WHERE UPPER(symbol) = UPPER(?1) ORDER BY traded_at, id",
         None => "SELECT id, account_id, symbol, market, transaction_type, shares, price,
-                        commission, traded_at, notes FROM transactions ORDER BY traded_at, id",
+                        commission, traded_at, notes, currency FROM transactions ORDER BY traded_at, id",
     };
     let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
     let map = |r: &rusqlite::Row<'_>| -> rusqlite::Result<TxRow> {
@@ -245,6 +285,7 @@ pub fn load_transactions(conn: &Connection, symbol: Option<&str>) -> Result<Vec<
             commission: r.get(7)?,
             traded_at: r.get(8)?,
             notes: r.get(9)?,
+            currency: r.get(10)?,
         })
     };
     let rows = match symbol {
@@ -262,7 +303,8 @@ pub fn list_round_trips(
     symbol: Option<&str>,
 ) -> Result<Vec<RoundTrip>, String> {
     let txs = load_transactions(conn, symbol)?;
-    Ok(pair_round_trips(&txs).0)
+    let rates = load_rates(conn);
+    Ok(pair_round_trips(&txs, &rates).0)
 }
 
 pub fn round_trip_summary(
@@ -270,7 +312,8 @@ pub fn round_trip_summary(
     symbol: Option<&str>,
 ) -> Result<RoundTripStats, String> {
     let txs = load_transactions(conn, symbol)?;
-    let (trips, open_lots) = pair_round_trips(&txs);
+    let rates = load_rates(conn);
+    let (trips, open_lots) = pair_round_trips(&txs, &rates);
     Ok(summarize(&trips, open_lots))
 }
 
@@ -344,12 +387,9 @@ pub fn list_due_reviews(
     conn: &Connection,
     include_completed: bool,
 ) -> Result<Vec<DueReview>, String> {
-    let where_clause = if include_completed {
-        ""
-    } else {
-        "WHERE r.completed_at IS NULL"
-    };
-    let sql = format!(
+    // Two literal statements keep the SQL-binding guard applicable to 100% of
+    // the code: no format!() fragment with unresolvable placeholders.
+    let sql = if include_completed {
         "SELECT r.id, r.transaction_id, r.symbol, r.review_type, r.decision_quality,
                 r.content, r.due_at, r.completed_at, r.created_at,
                 t.traded_at, t.notes, COALESCE(t.market, ''),
@@ -359,14 +399,30 @@ pub fn list_due_reviews(
                   ORDER BY td.decided_at DESC LIMIT 1)
          FROM trade_reviews r
          LEFT JOIN transactions t ON t.id = r.transaction_id
-         {where_clause}
          ORDER BY (r.completed_at IS NOT NULL) ASC,
                   ((SELECT td.override_reason FROM trade_discipline td
                      WHERE td.transaction_id = r.transaction_id
                        AND td.override_reason IS NOT NULL AND td.override_reason != ''
                      ORDER BY td.decided_at DESC LIMIT 1) IS NOT NULL) DESC,
                   COALESCE(r.due_at, '9999') ASC"
-    );
+    } else {
+        "SELECT r.id, r.transaction_id, r.symbol, r.review_type, r.decision_quality,
+                r.content, r.due_at, r.completed_at, r.created_at,
+                t.traded_at, t.notes, COALESCE(t.market, ''),
+                (SELECT td.override_reason FROM trade_discipline td
+                  WHERE td.transaction_id = r.transaction_id
+                    AND td.override_reason IS NOT NULL AND td.override_reason != ''
+                  ORDER BY td.decided_at DESC LIMIT 1)
+         FROM trade_reviews r
+         LEFT JOIN transactions t ON t.id = r.transaction_id
+         WHERE r.completed_at IS NULL
+         ORDER BY (r.completed_at IS NOT NULL) ASC,
+                  ((SELECT td.override_reason FROM trade_discipline td
+                     WHERE td.transaction_id = r.transaction_id
+                       AND td.override_reason IS NOT NULL AND td.override_reason != ''
+                     ORDER BY td.decided_at DESC LIMIT 1) IS NOT NULL) DESC,
+                  COALESCE(r.due_at, '9999') ASC"
+    };
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let now = Utc::now();
     let rows = stmt
@@ -707,11 +763,12 @@ fn row_to_memo(r: &rusqlite::Row<'_>) -> rusqlite::Result<InvestmentMemo> {
     })
 }
 
-const MEMO_SELECT: &str = "SELECT id, title, content, tags, holdings_snapshot, created_at, updated_at FROM investment_memos";
+const MEMO_LIST: &str = "SELECT id, title, content, tags, holdings_snapshot, created_at, updated_at FROM investment_memos ORDER BY created_at DESC";
+const MEMO_BY_ID: &str = "SELECT id, title, content, tags, holdings_snapshot, created_at, updated_at FROM investment_memos WHERE id = ?1";
 
 pub fn list_memos(conn: &Connection) -> Result<Vec<InvestmentMemo>, String> {
     let mut stmt = conn
-        .prepare(&format!("{MEMO_SELECT} ORDER BY created_at DESC"))
+        .prepare(MEMO_LIST)
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], row_to_memo)
@@ -738,7 +795,7 @@ pub fn create_memo(conn: &Connection, input: &MemoInput) -> Result<InvestmentMem
     )
     .map_err(|e| e.to_string())?;
     conn.query_row(
-        &format!("{MEMO_SELECT} WHERE id = ?1"),
+        MEMO_BY_ID,
         params![id],
         row_to_memo,
     )
@@ -754,7 +811,7 @@ pub fn delete_memo(conn: &Connection, id: &str) -> Result<(), String> {
 pub fn compare_memo(conn: &Connection, id: &str) -> Result<MemoComparison, String> {
     let memo = conn
         .query_row(
-            &format!("{MEMO_SELECT} WHERE id = ?1"),
+            MEMO_BY_ID,
             params![id],
             row_to_memo,
         )
@@ -810,6 +867,16 @@ mod tests {
             commission,
             traded_at: at.to_string(),
             notes: Some(format!("note-{id}")),
+            currency: "USD".to_string(),
+        }
+    }
+
+    fn rates() -> ExchangeRates {
+        ExchangeRates {
+            usd_cny: 7.2,
+            usd_hkd: 7.8,
+            cny_hkd: 7.8 / 7.2,
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
         }
     }
 
@@ -820,7 +887,7 @@ mod tests {
             tx("2", "BUY", 10.0, 20.0, 0.0, "2026-02-01T00:00:00Z"),
             tx("3", "SELL", 10.0, 25.0, 0.0, "2026-03-01T00:00:00Z"),
         ];
-        let (trips, open_lots) = pair_round_trips(&txs);
+        let (trips, open_lots) = pair_round_trips(&txs, &rates());
         assert_eq!(trips.len(), 1);
         assert_eq!(open_lots, 1);
         assert!((trips[0].avg_open_price - 20.0).abs() < 1e-9, "LIFO 应优先匹配 20 元的批次");
@@ -836,7 +903,7 @@ mod tests {
             tx("2", "SELL", 30.0, 8.0, 0.0, "2026-02-01T00:00:00Z"),
             tx("3", "SELL", 20.0, 9.0, 0.0, "2026-03-01T00:00:00Z"),
         ];
-        let (trips, open_lots) = pair_round_trips(&txs);
+        let (trips, open_lots) = pair_round_trips(&txs, &rates());
         assert_eq!(trips.len(), 2);
         assert_eq!(open_lots, 1, "剩余 50 股仍在未平仓批次");
         assert!((trips[0].realized_pnl - 90.0).abs() < 1e-9);
@@ -851,7 +918,7 @@ mod tests {
             tx("2", "BUY", 5.0, 20.0, 0.0, "2026-02-01T00:00:00Z"),
             tx("3", "SELL", 10.0, 30.0, 0.0, "2026-03-01T00:00:00Z"),
         ];
-        let (trips, open_lots) = pair_round_trips(&txs);
+        let (trips, open_lots) = pair_round_trips(&txs, &rates());
         assert_eq!(trips.len(), 1);
         assert_eq!(open_lots, 0);
         assert!(trips[0].split_lots);
@@ -866,7 +933,7 @@ mod tests {
             tx("2", "PAY", 0.0, 0.0, 0.0, "2026-01-15T00:00:00Z"),
             tx("3", "SELL", 10.0, 12.0, 5.0, "2026-02-01T00:00:00Z"),
         ];
-        let (trips, _) = pair_round_trips(&txs);
+        let (trips, _) = pair_round_trips(&txs, &rates());
         assert_eq!(trips.len(), 1);
         // proceeds 120 - close fee 5 - (100 + open fee 10) = 5
         assert!((trips[0].realized_pnl - 5.0).abs() < 1e-9);
@@ -879,7 +946,7 @@ mod tests {
             tx("2", "SELL", 5.0, 20.0, 0.0, "2026-02-01T00:00:00Z"), // +50
             tx("3", "SELL", 5.0, 6.0, 0.0, "2026-03-01T00:00:00Z"),  // -20
         ];
-        let (trips, open_lots) = pair_round_trips(&txs);
+        let (trips, open_lots) = pair_round_trips(&txs, &rates());
         let s = summarize(&trips, open_lots);
         assert_eq!(s.total_trades, 2);
         assert_eq!(s.winning_trades, 1);
@@ -898,15 +965,52 @@ mod tests {
         b.symbol = "BBB".into();
         let mut c = tx("3", "SELL", 10.0, 15.0, 0.0, "2026-02-01T00:00:00Z");
         c.symbol = "BBB".into();
-        let (trips, open_lots) = pair_round_trips(&[a, b, c]);
+        let (trips, open_lots) = pair_round_trips(&[a, b, c], &rates());
         assert_eq!(trips.len(), 1);
         assert_eq!(trips[0].symbol, "BBB");
         assert_eq!(open_lots, 1, "AAA 仍有未平仓批次");
     }
 
     #[test]
+    fn hkd_round_trip_is_converted_before_aggregation() {
+        let mut buy = tx("1", "BUY", 10.0, 100.0, 0.0, "2026-01-01T00:00:00Z");
+        buy.currency = "HKD".into();
+        let mut sell = tx("2", "SELL", 10.0, 120.0, 0.0, "2026-02-01T00:00:00Z");
+        sell.currency = "HKD".into();
+        let (trips, _) = pair_round_trips(&[buy, sell], &rates());
+        assert_eq!(trips.len(), 1);
+        assert!((trips[0].realized_pnl - 200.0).abs() < 1e-9, "原币盈亏仍为 200 HKD");
+        assert!((trips[0].realized_pnl_base - 200.0 / 7.8).abs() < 1e-9);
+        let s = summarize(&trips, 0);
+        assert!((s.total_realized_pnl_base - 200.0 / 7.8).abs() < 1e-9);
+        assert_eq!(s.base_currency, "USD");
+        assert!(!s.mixed_currency);
+    }
+
+    #[test]
+    fn mixed_currency_stats_never_sum_native_amounts() {
+        let mut a = tx("1", "BUY", 1.0, 10.0, 0.0, "2026-01-01T00:00:00Z");
+        a.currency = "USD".into();
+        a.symbol = "AAA".into();
+        let mut b = tx("2", "SELL", 1.0, 20.0, 0.0, "2026-02-01T00:00:00Z");
+        b.currency = "USD".into();
+        b.symbol = "AAA".into();
+        let mut c = tx("3", "BUY", 1.0, 100.0, 0.0, "2026-01-01T00:00:00Z");
+        c.currency = "HKD".into();
+        c.symbol = "BBB".into();
+        let mut d = tx("4", "SELL", 1.0, 110.0, 0.0, "2026-02-01T00:00:00Z");
+        d.currency = "HKD".into();
+        d.symbol = "BBB".into();
+        let (trips, _) = pair_round_trips(&[a, b, c, d], &rates());
+        let s = summarize(&trips, 0);
+        assert!(s.mixed_currency);
+        assert!((s.total_realized_pnl_base - (10.0 + 10.0 / 7.8)).abs() < 1e-9);
+        assert!((s.total_realized_pnl - 20.0).abs() < 1e-9, "原币合计仅作参考");
+    }
+
+    #[test]
     fn empty_history_is_safe() {
-        let (trips, open_lots) = pair_round_trips(&[]);
+        let (trips, open_lots) = pair_round_trips(&[], &rates());
         let s = summarize(&trips, open_lots);
         assert_eq!(s.total_trades, 0);
         assert_eq!(s.win_rate, 0.0);

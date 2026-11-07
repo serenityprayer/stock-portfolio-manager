@@ -13,9 +13,7 @@ pub const SEV_WARNING: &str = "warning";
 pub const SEV_CRITICAL: &str = "critical";
 pub const SEV_BLOCK: &str = "block";
 
-pub const STATUS_ACTIVE: &str = "active";
 pub const STATUS_ACKNOWLEDGED: &str = "acknowledged";
-pub const STATUS_RESOLVED: &str = "resolved";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RiskRuleConfig {
@@ -132,8 +130,11 @@ pub struct RiskContext {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RiskDashboard {
-    /// normal | warning | blocked
+    /// normal | warning | blocked | degraded (quotes missing/stale)
     pub status: String,
+    /// True when at least one position lacked a usable quote, so the three
+    /// iron laws did not fully run. Surfaced as a grey badge in the UI.
+    pub degraded: bool,
     pub as_of: String,
     pub base_currency: String,
     pub total_assets: f64,
@@ -230,20 +231,6 @@ pub struct TradeVerdict {
 pub struct TradeRiskContext {
     pub override_reason: Option<String>,
     pub ack_warning: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DisciplineRecord {
-    pub id: String,
-    pub transaction_id: Option<String>,
-    pub symbol: String,
-    pub action: String,
-    pub verdict: String,
-    pub rule_ids: Option<String>,
-    pub cooling_days: Option<f64>,
-    pub is_unplanned: bool,
-    pub override_reason: Option<String>,
-    pub decided_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

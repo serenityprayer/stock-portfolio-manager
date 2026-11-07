@@ -773,6 +773,7 @@ fn migrate_risk_control_tables(conn: &Connection) -> Result<()> {
             promoted_at  TEXT,
             created_at   TEXT NOT NULL,
             updated_at   TEXT NOT NULL,
+            deleted_at   TEXT,
             UNIQUE(symbol, market)
         );
         CREATE INDEX IF NOT EXISTS idx_watchlist_added ON watchlist(added_at);
@@ -857,6 +858,21 @@ fn migrate_risk_control_tables(conn: &Connection) -> Result<()> {
             "ALTER TABLE external_cash_flows ADD COLUMN counted_in_base INTEGER NOT NULL DEFAULT 0",
             [],
         )?;
+    }
+
+    // P1 follow-up: removing a watchlist item used to DELETE the row, which
+    // let a user reset the 7-day cooling clock by removing and re-adding the
+    // symbol. Rows are now soft-deleted so the UNIQUE(symbol, market) conflict
+    // still finds the original `added_at`.
+    let watch_cols: std::collections::HashSet<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('watchlist')")
+        .and_then(|mut stmt| {
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            rows.collect::<Result<std::collections::HashSet<_>, _>>()
+        })
+        .unwrap_or_default();
+    if !watch_cols.contains("deleted_at") {
+        conn.execute("ALTER TABLE watchlist ADD COLUMN deleted_at TEXT", [])?;
     }
 
     let now = chrono::Utc::now().to_rfc3339();

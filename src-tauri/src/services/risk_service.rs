@@ -66,11 +66,12 @@ fn row_to_rule(r: &rusqlite::Row<'_>) -> rusqlite::Result<RiskRuleConfig> {
 }
 
 const RULE_SELECT: &str = "SELECT id, name, description, severity, enabled, threshold, params, updated_at FROM risk_rules";
+const RULE_LIST: &str = "SELECT id, name, description, severity, enabled, threshold, params, updated_at FROM risk_rules ORDER BY id";
 
 pub fn list_rules(db: &Database) -> Result<Vec<RiskRuleConfig>, String> {
     let conn = db.conn.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare(&format!("{} ORDER BY id", RULE_SELECT))
+        .prepare(RULE_LIST)
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], row_to_rule)
@@ -321,7 +322,7 @@ fn row_to_hwm(r: &rusqlite::Row<'_>) -> rusqlite::Result<HwmState> {
     })
 }
 
-const HWM_SELECT: &str = "SELECT scope_key, peak_unit_nav, peak_date, current_unit_nav, base_value, base_date, net_external_flow, updated_at FROM portfolio_hwm";
+const HWM_BY_SCOPE: &str = "SELECT scope_key, peak_unit_nav, peak_date, current_unit_nav, base_value, base_date, net_external_flow, updated_at FROM portfolio_hwm WHERE scope_key = ?1";
 
 pub fn get_hwm(db: &Database) -> Result<HwmState, String> {
     let conn = db.conn.lock().map_err(|e| e.to_string())?;
@@ -330,7 +331,7 @@ pub fn get_hwm(db: &Database) -> Result<HwmState, String> {
 
 fn get_hwm_with_conn(conn: &Connection) -> Result<HwmState, String> {
     conn.query_row(
-        &format!("{} WHERE scope_key = ?1", HWM_SELECT),
+        HWM_BY_SCOPE,
         params![HWM_SCOPE],
         row_to_hwm,
     )
@@ -348,7 +349,7 @@ fn get_hwm_with_conn(conn: &Connection) -> Result<HwmState, String> {
         )
         .map_err(|e| e.to_string())?;
         conn.query_row(
-            &format!("{} WHERE scope_key = ?1", HWM_SELECT),
+            HWM_BY_SCOPE,
             params![HWM_SCOPE],
             row_to_hwm,
         )
@@ -363,10 +364,25 @@ fn get_hwm_with_conn(conn: &Connection) -> Result<HwmState, String> {
 /// 净外部现金流（已折算 USD）。V(t) 含现金持仓，故内部买卖自动抵消；
 /// F 由 `external_cash_flows` 提供（方案 A），故入金不掩盖回撤、出金不误触熔断。
 /// 历史 `daily_portfolio_values` 因口径不含现金，**不参与熔断判定**。
+/// The dashboard polls every 30 s. Writing an unchanged row on every poll is
+/// pure write amplification (WAL growth + mtime churn), so only persist when a
+/// value that affects risk judgement actually changed.
+fn should_persist_hwm(prev: &HwmState, next: &HwmState) -> bool {
+    const EPS: f64 = 1e-9;
+    (prev.current_unit_nav - next.current_unit_nav).abs() > EPS
+        || (prev.peak_unit_nav - next.peak_unit_nav).abs() > EPS
+        || (prev.base_value - next.base_value).abs() > EPS
+        || (prev.net_external_flow - next.net_external_flow).abs() > EPS
+        || prev.peak_date != next.peak_date
+        || prev.base_date != next.base_date
+}
+
 pub fn update_nav_state(db: &Database, total_assets_base: f64) -> Result<HwmState, String> {
     let conn = db.conn.lock().map_err(|e| e.to_string())?;
     let now = now_utc_str();
     let mut state = get_hwm_with_conn(&conn)?;
+    let before = state.clone();
+    let mut base_initialized = false;
 
     // 首次锚定：以当前实时总资产为基准，u0 = 1.0。
     if state.base_value <= 0.0 {
@@ -375,6 +391,7 @@ pub fn update_nav_state(db: &Database, total_assets_base: f64) -> Result<HwmStat
         }
         state.base_value = total_assets_base;
         state.base_date = now.clone();
+        base_initialized = true;
         conn.execute(
             "UPDATE portfolio_hwm SET base_value = ?2, base_date = ?3 WHERE scope_key = ?1",
             params![HWM_SCOPE, state.base_value, state.base_date],
@@ -408,21 +425,25 @@ pub fn update_nav_state(db: &Database, total_assets_base: f64) -> Result<HwmStat
     state.net_external_flow = net_flow;
     state.updated_at = now.clone();
 
-    conn.execute(
-        "UPDATE portfolio_hwm
-         SET peak_unit_nav = ?2, peak_date = ?3, current_unit_nav = ?4,
-             net_external_flow = ?5, updated_at = ?6
-         WHERE scope_key = ?1",
-        params![
-            HWM_SCOPE,
-            state.peak_unit_nav,
-            state.peak_date,
-            state.current_unit_nav,
-            state.net_external_flow,
-            state.updated_at
-        ],
-    )
-    .map_err(|e| e.to_string())?;
+    if base_initialized || should_persist_hwm(&before, &state) {
+        conn.execute(
+            "UPDATE portfolio_hwm
+             SET peak_unit_nav = ?2, peak_date = ?3, current_unit_nav = ?4,
+                 net_external_flow = ?5, updated_at = ?6
+             WHERE scope_key = ?1",
+            params![
+                HWM_SCOPE,
+                state.peak_unit_nav,
+                state.peak_date,
+                state.current_unit_nav,
+                state.net_external_flow,
+                state.updated_at
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    } else {
+        state.updated_at = before.updated_at.clone();
+    }
 
     Ok(state)
 }
@@ -498,7 +519,11 @@ fn row_to_event(r: &rusqlite::Row<'_>) -> rusqlite::Result<RiskEvent> {
     })
 }
 
-const EVENT_SELECT: &str = "SELECT id, rule_id, symbol, account_id, severity, status, metric_value, threshold, message, context, first_triggered_at, last_triggered_at, resolved_at FROM risk_events";
+const EVENT_ACTIVE: &str = "SELECT id, rule_id, symbol, account_id, severity, status, metric_value, threshold, message, context, first_triggered_at, last_triggered_at, resolved_at FROM risk_events
+             WHERE status IN ('active', 'acknowledged')
+             ORDER BY CASE severity WHEN 'block' THEN 4 WHEN 'critical' THEN 3
+                                   WHEN 'warning' THEN 2 ELSE 1 END DESC,
+                      last_triggered_at DESC";
 
 fn sync_events(conn: &Connection, findings: &[RiskFinding]) -> Result<Vec<RiskEvent>, String> {
     let now = now_utc_str();
@@ -589,13 +614,7 @@ fn sync_events(conn: &Connection, findings: &[RiskFinding]) -> Result<Vec<RiskEv
     }
 
     let mut stmt = conn
-        .prepare(&format!(
-            "{} WHERE status IN ('active', 'acknowledged')
-             ORDER BY CASE severity WHEN 'block' THEN 4 WHEN 'critical' THEN 3
-                                   WHEN 'warning' THEN 2 ELSE 1 END DESC,
-                      last_triggered_at DESC",
-            EVENT_SELECT
-        ))
+        .prepare(EVENT_ACTIVE)
         .map_err(|e| e.to_string())?;
     let events = stmt
         .query_map([], row_to_event)
@@ -627,6 +646,23 @@ pub fn evaluate_risk(db: &Database) -> Result<Vec<RiskFinding>, String> {
     Ok(findings)
 }
 
+/// Severity precedence: a real finding always outranks a data-quality
+/// degradation; `degraded` only replaces the "normal" state.
+pub fn dashboard_status(findings: &[RiskFinding], degraded: bool) -> String {
+    if findings.iter().any(|f| f.severity == SEV_BLOCK) {
+        "blocked".to_string()
+    } else if findings
+        .iter()
+        .any(|f| f.severity == SEV_CRITICAL || f.severity == SEV_WARNING)
+    {
+        "warning".to_string()
+    } else if degraded {
+        "degraded".to_string()
+    } else {
+        "normal".to_string()
+    }
+}
+
 pub fn get_dashboard(db: &Database) -> Result<RiskDashboard, String> {
     let ctx = build_context(db)?;
     let findings = evaluate_all(&ctx);
@@ -636,16 +672,12 @@ pub fn get_dashboard(db: &Database) -> Result<RiskDashboard, String> {
     };
     let rules = list_rules(db)?;
 
-    let status = if findings.iter().any(|f| f.severity == SEV_BLOCK) {
-        "blocked"
-    } else if findings
-        .iter()
-        .any(|f| f.severity == SEV_CRITICAL || f.severity == SEV_WARNING)
-    {
-        "warning"
-    } else {
-        "normal"
-    };
+    // A missing/stale quote makes `quote_usable` skip the stop-loss and
+    // concentration rules. Reporting "normal" in that state is a silent
+    // failure, so expose it explicitly as `degraded`.
+    let degraded = !ctx.freshness.missing_symbols.is_empty()
+        || !ctx.freshness.stale_symbols.is_empty();
+    let status = dashboard_status(&findings, degraded);
 
     let drawdown = if ctx.peak_unit_nav > 0.0 {
         (ctx.unit_nav - ctx.peak_unit_nav) / ctx.peak_unit_nav * 100.0
@@ -684,6 +716,7 @@ pub fn get_dashboard(db: &Database) -> Result<RiskDashboard, String> {
 
     Ok(RiskDashboard {
         status: status.to_string(),
+        degraded,
         as_of: ctx.as_of,
         base_currency: ctx.base_currency,
         total_assets: ctx.total_assets_base,
@@ -706,4 +739,80 @@ pub fn get_dashboard(db: &Database) -> Result<RiskDashboard, String> {
         events,
         rules,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hwm() -> HwmState {
+        HwmState {
+            scope_key: HWM_SCOPE.to_string(),
+            peak_unit_nav: 1.2,
+            peak_date: "2026-01-01T00:00:00Z".to_string(),
+            current_unit_nav: 1.1,
+            base_value: 100_000.0,
+            base_date: "2026-01-01T00:00:00Z".to_string(),
+            net_external_flow: 500.0,
+            updated_at: "2026-01-02T00:00:00Z".to_string(),
+        }
+    }
+
+    fn finding(severity: &str) -> RiskFinding {
+        RiskFinding {
+            rule_id: "TEST".to_string(),
+            severity: severity.to_string(),
+            symbol: None,
+            metric: 0.0,
+            threshold: 0.0,
+            message: String::new(),
+            context: serde_json::Value::Null,
+        }
+    }
+
+    #[test]
+    fn dashboard_status_precedence() {
+        assert_eq!(dashboard_status(&[], false), "normal");
+        assert_eq!(dashboard_status(&[], true), "degraded");
+        assert_eq!(
+            dashboard_status(&[finding(SEV_CRITICAL)], true),
+            "warning",
+            "真实预警优先于降级提示"
+        );
+        assert_eq!(
+            dashboard_status(&[finding(SEV_BLOCK)], true),
+            "blocked"
+        );
+        assert_eq!(
+            dashboard_status(&[finding(SEV_INFO)], false),
+            "normal",
+            "仅 info 不改变状态"
+        );
+    }
+
+    #[test]
+    fn unchanged_state_is_not_persisted() {
+        let a = hwm();
+        let mut b = a.clone();
+        b.updated_at = "2026-11-08T00:00:00Z".to_string();
+        assert!(!should_persist_hwm(&a, &b), "仅时间戳变化不应写库");
+    }
+
+    #[test]
+    fn every_risk_relevant_field_triggers_a_write() {
+        let a = hwm();
+        let mut b = a.clone();
+        b.current_unit_nav = 1.05;
+        assert!(should_persist_hwm(&a, &b));
+        let mut c = a.clone();
+        c.peak_unit_nav = 1.3;
+        c.peak_date = "2026-02-01T00:00:00Z".to_string();
+        assert!(should_persist_hwm(&a, &c));
+        let mut d = a.clone();
+        d.net_external_flow += 1000.0;
+        assert!(should_persist_hwm(&a, &d));
+        let mut e = a.clone();
+        e.base_value = 120_000.0;
+        assert!(should_persist_hwm(&a, &e));
+    }
 }

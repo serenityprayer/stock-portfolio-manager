@@ -26,7 +26,30 @@ pub fn resolve_overrides(
     Ok((global, by_symbol))
 }
 
+/// Translation multiplier for a non-USD position. A -10% CNY shock means CNY
+/// assets are worth 10% less in USD terms. Zero/unknown -> no change.
+pub fn fx_factor(currency: &str, fx: Option<&FxShock>) -> f64 {
+    let Some(fx) = fx else { return 1.0 };
+    let pct = match currency {
+        "CNY" => fx.cny_percent,
+        "HKD" => fx.hkd_percent,
+        _ => 0.0,
+    };
+    if !pct.is_finite() || pct <= -100.0 {
+        return 0.0;
+    }
+    (1.0 + pct / 100.0).max(0.0)
+}
+
 pub fn run(db: &Database, overrides: &[StressOverride]) -> Result<StressResult, String> {
+    run_with_options(db, overrides, None)
+}
+
+pub fn run_with_options(
+    db: &Database,
+    overrides: &[StressOverride],
+    fx: Option<&FxShock>,
+) -> Result<StressResult, String> {
     let mut ctx = risk_service::build_context_with_options(db, false)?;
     let hwm = risk_service::get_hwm(db)?;
     let (global, by_symbol) = resolve_overrides(overrides)?;
@@ -50,10 +73,13 @@ pub fn run(db: &Database, overrides: &[StressOverride]) -> Result<StressResult, 
             .or(global);
         let Some(pct) = pct else { continue };
         let factor = (1.0 + pct / 100.0).max(0.0);
+        let fx_mult = fx_factor(&p.currency, fx);
         let old_price = p.price;
         let old_value = p.market_value_base;
         let new_price = old_price * factor;
-        let new_value = old_value * factor;
+        // FX shock only affects the converted market value, not the native
+        // quote itself. Cash is excluded (no per-currency breakdown).
+        let new_value = old_value * factor * fx_mult;
 
         p.price = new_price;
         p.market_value_base = new_value;
@@ -111,6 +137,42 @@ pub fn run(db: &Database, overrides: &[StressOverride]) -> Result<StressResult, 
     })
 }
 
+/// Run the same shock set at several market-wide levels for side-by-side
+/// comparison. Every run is a read-only preview (no HWM / risk-event writes).
+pub fn run_batch(
+    db: &Database,
+    shocks: &[f64],
+    overrides: &[StressOverride],
+    fx: Option<&FxShock>,
+) -> Result<Vec<ScenarioResult>, String> {
+    if shocks.is_empty() || shocks.len() > 8 {
+        return Err("情景数量需在 1–8 个之间".to_string());
+    }
+    let symbol_overrides: Vec<StressOverride> = overrides
+        .iter()
+        .filter(|o| o.symbol.trim() != "*")
+        .cloned()
+        .collect();
+    let mut out = Vec::with_capacity(shocks.len());
+    for &shock in shocks {
+        let mut scenario = symbol_overrides.clone();
+        scenario.push(StressOverride {
+            symbol: "*".to_string(),
+            price_change_percent: shock,
+        });
+        let r = run_with_options(db, &scenario, fx)?;
+        out.push(ScenarioResult {
+            label: format!("{shock:+.0}%"),
+            global_percent: shock,
+            stressed_total_assets: r.stressed_total_assets,
+            stressed_drawdown: r.stressed_drawdown,
+            status: r.status,
+            finding_count: r.findings.len(),
+        });
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,6 +187,17 @@ mod tests {
         assert_eq!(global, Some(-10.0));
         assert_eq!(by_symbol.get("PDD").copied().or(global), Some(-30.0));
         assert_eq!(by_symbol.get("RDDT").copied().or(global), Some(-10.0));
+    }
+
+    #[test]
+    fn fx_shock_only_touches_matching_currencies() {
+        let fx = FxShock { cny_percent: -10.0, hkd_percent: -5.0 };
+        assert!((fx_factor("CNY", Some(&fx)) - 0.9).abs() < 1e-9);
+        assert!((fx_factor("HKD", Some(&fx)) - 0.95).abs() < 1e-9);
+        assert_eq!(fx_factor("USD", Some(&fx)), 1.0);
+        assert_eq!(fx_factor("CNY", None), 1.0);
+        let extreme = FxShock { cny_percent: -150.0, hkd_percent: 0.0 };
+        assert_eq!(fx_factor("CNY", Some(&extreme)), 0.0);
     }
 
     #[test]

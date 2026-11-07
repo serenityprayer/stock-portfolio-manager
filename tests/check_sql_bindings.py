@@ -160,9 +160,25 @@ def expected_count(sql: str) -> int | None:
     return None
 
 
+CONST_SQL_DEF = re.compile(
+    r"\bconst\s+([A-Z][A-Z0-9_]*)\s*:\s*&str\s*=\s*\"((?:[^\"\\]|\\.)*)\"",
+    re.S,
+)
+
+
 def check_file(path: Path) -> tuple[int, int, list[str]]:
     text = path.read_text(encoding="utf-8")
     literals = string_literals(text)
+    const_sql = {m.group(1): m.group(2) for m in CONST_SQL_DEF.finditer(text)}
+    # A SQL statement is often pulled into a named `const &str` and then
+    # referenced as `conn.execute(MEMO_BY_ID, params![...])`. Register each
+    # such reference as a virtual literal at the *call site*, otherwise the
+    # guard would inspect the previous (unrelated) statement's SQL.
+    if const_sql:
+        names = "|".join(re.escape(n) for n in sorted(const_sql, key=len, reverse=True))
+        for m in re.finditer(r"[(,]\s*(" + names + r")\s*[,)]", text):
+            literals.append((m.start(1), m.end(1), const_sql[m.group(1)]))
+        literals.sort(key=lambda lit: lit[0])
     problems: list[str] = []
     checked = 0
     skipped = 0
@@ -176,16 +192,21 @@ def check_file(path: Path) -> tuple[int, int, list[str]]:
         parts = split_top_level(body)
         got = len(parts)
 
-        # The SQL is the nearest string literal before this macro.
+        # Pick the closest preceding literal that DECLARES parameters. This
+        # skips log strings, parameter-free SELECTs and the placeholder-free
+        # branch of a `let sql = match ...`, while still handling dynamic
+        # `format!("{} WHERE ... ?1", base_query)` fragments and const &str
+        # references (registered as virtual literals above).
         prior = [lit for lit in literals if lit[1] < match.start()]
-        if not prior:
+        chosen = next(
+            (lit for lit in reversed(prior) if expected_count(lit[2]) is not None),
+            None,
+        )
+        if chosen is None:
             skipped += 1
             continue
-        sql = prior[-1][2]
+        sql = chosen[2]
         needed = expected_count(sql)
-        if needed is None:
-            skipped += 1
-            continue
 
         line = text.count("\n", 0, match.start()) + 1
         checked += 1

@@ -218,6 +218,11 @@ fn evidence_block(items: &[LocalEvidence]) -> String {
     s
 }
 
+/// Citation verification uses every candidate the local search read, not just
+/// the top-N sent to the model. A model quoting a note that ranked 9th used to
+/// be flagged as "unmatched" even though the record exists locally (review B5).
+pub const EVIDENCE_CANDIDATES: usize = 400;
+
 fn is_known_citation(c: &Citation, evidence: &[LocalEvidence]) -> bool {
     evidence.iter().any(|e| {
         e.source == c.source
@@ -382,7 +387,11 @@ fn degraded_reply(query: &str, evidence: &[LocalEvidence]) -> AdvisorReply {
                 excerpt: e.excerpt.clone(),
             })
             .collect(),
-        used_sources: evidence.iter().map(|e| e.source.clone()).collect(),
+        used_sources: evidence
+            .iter()
+            .take(8)
+            .map(|e| e.source.clone())
+            .collect(),
         degraded: true,
     }
 }
@@ -397,7 +406,7 @@ pub async fn chat_with_advisor(db: &Database, message: &str) -> Result<AdvisorRe
     }
     let (evidence, cfg, context) = {
         let conn = db.conn.lock().map_err(|e| e.to_string())?;
-        let ev = collect_evidence(&conn, message, 8)?;
+        let ev = collect_evidence(&conn, message, EVIDENCE_CANDIDATES)?;
         // Read from the already-held connection: locking `db` again here would
         // deadlock on the non-reentrant mutex (same trap as P1).
         let cfg = ai_config_service::read_raw_config(&conn);
@@ -405,11 +414,11 @@ pub async fn chat_with_advisor(db: &Database, message: &str) -> Result<AdvisorRe
         (ev, cfg, ctx)
     };
     if cfg.api_key.trim().is_empty() {
-        return Ok(degraded_reply(message, &evidence));
+        return Ok(degraded_reply(message, &evidence[..evidence.len().min(8)]));
     }
     let user = format!(
         "【组合现状】\n{context}\n\n【用户想被质疑的话】\n{message}\n\n{}\n\n请按系统规则输出 JSON。",
-        evidence_block(&evidence)
+        evidence_block(&evidence[..evidence.len().min(8)])
     );
     let reply = call_llm(&cfg, &build_system_prompt(&cfg), &user).await?;
     let analysis = parse_analysis(&reply, "", &evidence);
@@ -435,7 +444,11 @@ pub async fn chat_with_advisor(db: &Database, message: &str) -> Result<AdvisorRe
     Ok(AdvisorReply {
         reply: text,
         citations: analysis.citations,
-        used_sources: evidence.iter().map(|e| e.source.clone()).collect(),
+        used_sources: evidence
+            .iter()
+            .take(8)
+            .map(|e| e.source.clone())
+            .collect(),
         degraded: false,
     })
 }
@@ -468,7 +481,7 @@ pub async fn analyze_trade(
             return Err("交易记录不存在".to_string());
         };
         let query = format!("{} {} {}", tx.0, tx.1, tx.6.clone().unwrap_or_default());
-        let ev = collect_evidence(&conn, &query, 8)?;
+        let ev = collect_evidence(&conn, &query, EVIDENCE_CANDIDATES)?;
         let cfg = ai_config_service::read_raw_config(&conn);
         (tx, ev, cfg)
     };
@@ -476,7 +489,7 @@ pub async fn analyze_trade(
     if cfg.api_key.trim().is_empty() {
         let mut out = parse_analysis("", transaction_id, &evidence);
         out.degraded = true;
-        out.raw = Some(degraded_reply(&tx.0, &evidence).reply);
+        out.raw = Some(degraded_reply(&tx.0, &evidence[..evidence.len().min(8)]).reply);
         return Ok(out);
     }
 
@@ -488,7 +501,7 @@ pub async fn analyze_trade(
         tx.4,
         tx.5,
         tx.6.as_deref().unwrap_or("未记录"),
-        evidence_block(&evidence)
+        evidence_block(&evidence[..evidence.len().min(8)])
     );
     let reply = call_llm(&cfg, &build_system_prompt(&cfg), &user).await?;
     let mut analysis = parse_analysis(&reply, transaction_id, &evidence);
@@ -597,6 +610,27 @@ mod tests {
         let a = parse_analysis("模型拒绝回答", "tx1", &[]);
         assert!(a.raw.is_some());
         assert!(a.challenges.is_empty());
+    }
+
+    #[test]
+    fn citation_beyond_prompt_top_n_is_still_verified() {
+        let mut all = Vec::new();
+        for i in 0..12 {
+            all.push(LocalEvidence {
+                source: "investment_memos".to_string(),
+                ref_id: format!("m{i}"),
+                excerpt: String::new(),
+                score: 12.0 - i as f64,
+            });
+        }
+        let prompt = all.iter().take(8).cloned().collect::<Vec<_>>();
+        let c = Citation {
+            source: "investment_memos".to_string(),
+            ref_id: Some("m10".to_string()),
+            excerpt: String::new(),
+        };
+        assert!(!is_known_citation(&c, &prompt), "不在 prompt 的 top-8 里");
+        assert!(is_known_citation(&c, &all), "但在本地全量候选中，应通过核验");
     }
 
     #[test]

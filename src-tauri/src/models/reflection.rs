@@ -3,8 +3,6 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const REVIEW_TIME_CAPSULE: &str = "time_capsule";
-pub const REVIEW_AI_ANALYSIS: &str = "ai_analysis";
 pub const QUALITY_CORRECT: &str = "correct";
 pub const QUALITY_WRONG: &str = "wrong";
 pub const QUALITY_PENDING: &str = "pending";
@@ -14,14 +12,19 @@ pub const QUALITY_PENDING: &str = "pending";
 pub struct RoundTrip {
     pub symbol: String,
     pub market: String,
+    pub currency: String,
     pub open_at: String,
     pub close_at: String,
     pub holding_days: i64,
     pub qty: f64,
     pub avg_open_price: f64,
     pub avg_close_price: f64,
-    /// Net of the proportional commissions on both legs.
+    /// Net of the proportional commissions on both legs, in the trade currency.
     pub realized_pnl: f64,
+    /// Same PnL converted to the risk engine's base currency (USD). All
+    /// aggregate statistics use this field so mixed-market portfolios never
+    /// add USD, HKD and CNY amounts together.
+    pub realized_pnl_base: f64,
     pub return_rate: f64,
     pub open_note: Option<String>,
     pub close_note: Option<String>,
@@ -37,7 +40,15 @@ pub struct RoundTripStats {
     pub win_rate: f64,
     /// Gross profit / absolute gross loss. `None` when there is no loss.
     pub profit_factor: Option<f64>,
+    /// Sum of `realized_pnl` in trade currencies — only meaningful when every
+    /// round trip shares one currency. Use `total_realized_pnl_base` instead.
     pub total_realized_pnl: f64,
+    /// Sum of `realized_pnl_base`. This is the canonical cross-market figure.
+    pub total_realized_pnl_base: f64,
+    pub base_currency: String,
+    pub mixed_currency: bool,
+    /// Explains which FX rate was used; historical per-trade rates are not kept.
+    pub fx_note: String,
     pub avg_holding_days: f64,
     pub best_trade: Option<RoundTrip>,
     pub worst_trade: Option<RoundTrip>,

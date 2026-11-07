@@ -298,8 +298,10 @@ pub fn run() {
             commands::advisor::analyze_trade,
             // Enhancements (P4)
             commands::enhancement::stress_test,
+            commands::enhancement::compare_stress_scenarios,
             commands::enhancement::evaluate_contract_risk,
             commands::enhancement::check_data_quality,
+            commands::enhancement::clear_quote_cache,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
