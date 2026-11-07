@@ -9,6 +9,7 @@ import type {
   DisciplineStats,
   DueReview,
   ExternalCashFlow,
+  FxShock,
   HwmState,
   InvestmentMemo,
   MemoComparison,
@@ -16,6 +17,7 @@ import type {
   RiskDashboard,
   RoundTrip,
   RoundTripStats,
+  ScenarioResult,
   StressOverride,
   StressResult,
   TradeAnalysis,
@@ -57,6 +59,7 @@ interface RiskState {
 
   // P4
   stressResult: StressResult | null;
+  scenarios: ScenarioResult[];
   contractRisks: ContractRiskItem[];
   quality: DataQualityReport | null;
 
@@ -93,8 +96,15 @@ interface RiskState {
   askAdvisor: (message: string) => Promise<boolean>;
 
   stressTest: (overrides: StressOverride[]) => Promise<boolean>;
-  fetchContractRisk: (prices: ContractPriceInput[]) => Promise<void>;
+  compareScenarios: (
+    shocks: number[],
+    overrides: StressOverride[],
+    fx: FxShock | null,
+  ) => Promise<boolean>;
+  /** Fetches live Gate.io / TradFi quotes itself, then evaluates. */
+  fetchContractRisk: () => Promise<void>;
   fetchQuality: () => Promise<void>;
+  clearQuoteCache: (symbol: string) => Promise<number>;
 }
 
 const errText = (err: unknown) => String(err);
@@ -118,6 +128,7 @@ export const useRiskStore = create<RiskState>((set, get) => ({
   advisorReply: null,
   aiBusy: false,
   stressResult: null,
+  scenarios: [],
   contractRisks: [],
   quality: null,
 
@@ -399,11 +410,53 @@ export const useRiskStore = create<RiskState>((set, get) => ({
     }
   },
 
-  fetchContractRisk: async (prices) => {
+  compareScenarios: async (shocks, overrides, fx) => {
     try {
-      const contractRisks = await invoke<ContractRiskItem[]>("evaluate_contract_risk", {
-        prices,
+      const scenarios = await invoke<ScenarioResult[]>("compare_stress_scenarios", {
+        shocks,
+        overrides,
+        fx,
       });
+      set({ scenarios });
+      return true;
+    } catch (err) {
+      set({ error: errText(err) });
+      return false;
+    }
+  },
+
+  fetchContractRisk: async () => {
+    try {
+      // The crypto-contract page has its own 30 s quote poll, but the Risk
+      // Center is a separate route with no shared quote state. Fetch once on
+      // demand so ETH/BNB liquidation distances use real prices instead of
+      // silently falling back to the open price.
+      const contracts = await invoke<Array<{ symbol: string; asset_type?: string }>>(
+        "list_crypto_contracts",
+      );
+      const cryptoSymbols = contracts
+        .filter((c) => (c.asset_type ?? "crypto") === "crypto")
+        .map((c) => c.symbol)
+        .join(",");
+      const tradfiSymbols = contracts
+        .filter((c) => c.asset_type === "tradfi")
+        .map((c) => c.symbol)
+        .join(",");
+      type QuoteMap = Record<string, { price?: number; current_price?: number }>;
+      const [cryptoQuotes, tradfiQuotes] = await Promise.all([
+        cryptoSymbols
+          ? invoke<QuoteMap>("fetch_crypto_quotes", { symbols: cryptoSymbols }).catch(() => ({}) as QuoteMap)
+          : Promise.resolve({} as QuoteMap),
+        tradfiSymbols
+          ? invoke<QuoteMap>("fetch_tradfi_quotes", { symbols: tradfiSymbols }).catch(() => ({}) as QuoteMap)
+          : Promise.resolve({} as QuoteMap),
+      ]);
+      const prices: ContractPriceInput[] = [];
+      for (const [symbol, q] of Object.entries({ ...cryptoQuotes, ...tradfiQuotes })) {
+        const price = Number(q?.price ?? q?.current_price ?? 0);
+        if (Number.isFinite(price) && price > 0) prices.push({ symbol, price });
+      }
+      const contractRisks = await invoke<ContractRiskItem[]>("evaluate_contract_risk", { prices });
       set({ contractRisks });
     } catch (err) {
       set({ error: errText(err) });
@@ -416,6 +469,17 @@ export const useRiskStore = create<RiskState>((set, get) => ({
       set({ quality });
     } catch (err) {
       set({ error: errText(err) });
+    }
+  },
+
+  clearQuoteCache: async (symbol) => {
+    try {
+      const removed = await invoke<number>("clear_quote_cache", { symbol });
+      await Promise.all([get().fetchQuality(), get().fetchDashboard()]);
+      return removed;
+    } catch (err) {
+      set({ error: errText(err) });
+      return -1;
     }
   },
 }));

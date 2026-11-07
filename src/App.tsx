@@ -1,28 +1,31 @@
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Alert } from "antd";
+import { Alert, Spin } from "antd";
 import { useQuoteStore } from "./stores/quoteStore";
 import MainLayout from "./components/Layout/MainLayout";
+// The dashboard is the landing page, so it stays in the entry chunk.
+// Every other route is loaded on demand — the Risk Center in particular pulls
+// in a large amount of Ant Design table/form code that most sessions never use.
 import DashboardPage from "./pages/Dashboard";
-import AccountsPage from "./pages/Accounts";
-import HoldingsPage from "./pages/Holdings";
-import TransactionsPage from "./pages/Transactions";
-import CategoriesPage from "./pages/Categories";
-import StatisticsPage from "./pages/Statistics";
-import PerformancePage from "./pages/Performance";
-import QuarterlyPage from "./pages/Quarterly";
-import SnapshotDetail from "./pages/Quarterly/SnapshotDetail";
-import QuarterComparisonPage from "./pages/Quarterly/QuarterComparison";
-import TrendsPage from "./pages/Quarterly/TrendsPage";
-import ImportPage from "./pages/Import";
-import AlertsPage from "./pages/Alerts";
-import ReviewPage from "./pages/Review";
-import RiskPage from "./pages/Risk";
-import CryptoSpotPage from "./pages/CryptoSpot";
-import CryptoContractPage from "./pages/CryptoContract";
-import SettingsPage from "./pages/Settings";
+const AccountsPage = lazy(() => import("./pages/Accounts"));
+const HoldingsPage = lazy(() => import("./pages/Holdings"));
+const TransactionsPage = lazy(() => import("./pages/Transactions"));
+const CategoriesPage = lazy(() => import("./pages/Categories"));
+const StatisticsPage = lazy(() => import("./pages/Statistics"));
+const PerformancePage = lazy(() => import("./pages/Performance"));
+const QuarterlyPage = lazy(() => import("./pages/Quarterly"));
+const SnapshotDetail = lazy(() => import("./pages/Quarterly/SnapshotDetail"));
+const QuarterComparisonPage = lazy(() => import("./pages/Quarterly/QuarterComparison"));
+const TrendsPage = lazy(() => import("./pages/Quarterly/TrendsPage"));
+const ImportPage = lazy(() => import("./pages/Import"));
+const AlertsPage = lazy(() => import("./pages/Alerts"));
+const ReviewPage = lazy(() => import("./pages/Review"));
+const RiskPage = lazy(() => import("./pages/Risk"));
+const CryptoSpotPage = lazy(() => import("./pages/CryptoSpot"));
+const CryptoContractPage = lazy(() => import("./pages/CryptoContract"));
+const SettingsPage = lazy(() => import("./pages/Settings"));
 
 function App() {
   // quoteWarning in the global store is the single source of truth for the
@@ -107,6 +110,7 @@ function App() {
         </div>
       )}
       <MainLayout>
+        <Suspense fallback={<div style={{ padding: 48, textAlign: "center" }}><Spin /></div>}>
         <Routes>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
@@ -128,6 +132,7 @@ function App() {
           <Route path="/crypto-contract" element={<CryptoContractPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
+        </Suspense>
       </MainLayout>
     </>
   );

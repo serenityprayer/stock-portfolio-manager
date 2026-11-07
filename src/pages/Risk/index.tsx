@@ -52,6 +52,7 @@ const STATUS: Record<string, { color: string; label: string }> = {
   normal: { color: "success", label: "正常" },
   warning: { color: "warning", label: "预警" },
   blocked: { color: "error", label: "熔断" },
+  degraded: { color: "default", label: "风控降级" },
 };
 
 const FLOW_LABEL: Record<string, string> = {
@@ -76,16 +77,19 @@ function MetricCard({
   valueColor,
   hint,
   percent,
+  badge,
 }: {
   label: string;
   value: string;
   valueColor?: string;
   hint: string;
   percent: number;
+  badge?: string;
 }) {
   return (
     <Card size="small" styles={{ body: { padding: "16px 18px" } }}>
       <Text type="secondary" style={{ fontSize: 12 }}>{label}</Text>
+      {badge && <Tag color="default" style={{ marginLeft: 6 }}>{badge}</Tag>}
       <div style={{ fontSize: 26, fontWeight: 600, margin: "6px 0 2px", color: valueColor }}>
         {value}
       </div>
@@ -134,6 +138,7 @@ export default function RiskPage() {
     advisorReply,
     aiBusy,
     stressResult,
+    scenarios,
     contractRisks,
     quality,
     fetchRoundTrips,
@@ -148,8 +153,10 @@ export default function RiskPage() {
     analyzeTrade,
     askAdvisor,
     stressTest,
+    compareScenarios,
     fetchContractRisk,
     fetchQuality,
+    clearQuoteCache,
   } = useRiskStore();
 
   const [accounts, setAccounts] = useState<Array<{ id: string; name: string }>>([]);
@@ -182,6 +189,11 @@ export default function RiskPage() {
   const [stressSymbolPct, setStressSymbolPct] = useState<number>(-30);
   const [aiMessage, setAiMessage] = useState("");
   const [aiTxId, setAiTxId] = useState("");
+  const [cacheSymbol, setCacheSymbol] = useState("");
+  const [contractBusy, setContractBusy] = useState(false);
+  const [scenarioBusy, setScenarioBusy] = useState(false);
+  const [fxCny, setFxCny] = useState<number>(0);
+  const [fxHkd, setFxHkd] = useState<number>(0);
 
   useEffect(() => {
     fetchDashboard();
@@ -419,8 +431,14 @@ export default function RiskPage() {
       key: "pnl",
       width: 120,
       render: (_: unknown, r: RoundTrip) => (
-        <span style={{ color: pctColor(r.realized_pnl), fontWeight: 500 }}>
-          {r.realized_pnl >= 0 ? "+" : ""}{r.realized_pnl.toFixed(2)} ({r.return_rate >= 0 ? "+" : ""}{r.return_rate.toFixed(1)}%)
+        <span style={{ color: pctColor(r.realized_pnl_base), fontWeight: 500 }}>
+          {r.realized_pnl >= 0 ? "+" : ""}{r.realized_pnl.toFixed(2)} {r.currency}
+          {r.currency !== "USD" && (
+            <div style={{ fontSize: 11, color: "#8c8c8c", fontWeight: 400 }}>
+              ≈ {r.realized_pnl_base >= 0 ? "+" : ""}{r.realized_pnl_base.toFixed(2)} USD
+            </div>
+          )}
+          ({r.return_rate >= 0 ? "+" : ""}{r.return_rate.toFixed(1)}%)
         </span>
       ),
     },
@@ -439,6 +457,29 @@ export default function RiskPage() {
       width: 70,
       render: (_: unknown, r: RoundTrip) => r.split_lots ? <Tag color="blue">跨批次</Tag> : null,
     },
+  ];
+
+  const scenarioColumns = [
+    { title: "情景", dataIndex: "label", key: "label", width: 90 },
+    {
+      title: "总资产 (USD)",
+      dataIndex: "stressed_total_assets",
+      key: "assets",
+      render: (v: number) => v.toFixed(2),
+    },
+    {
+      title: "回撤",
+      dataIndex: "stressed_drawdown",
+      key: "dd",
+      render: (v: number) => <span style={{ color: pctColor(v) }}>{v.toFixed(2)}%</span>,
+    },
+    {
+      title: "状态",
+      dataIndex: "status",
+      key: "status",
+      render: (v: string) => <Tag color={STATUS[v]?.color}>{STATUS[v]?.label ?? v}</Tag>,
+    },
+    { title: "触发规则", dataIndex: "finding_count", key: "count", width: 90 },
   ];
 
   const reviewColumns = [
@@ -632,6 +673,15 @@ export default function RiskPage() {
       {d.status === "warning" && (
         <Alert type="warning" showIcon banner message="存在需要关注的风控预警" className="!mb-3" />
       )}
+      {d.degraded && (
+        <Alert
+          type="warning"
+          showIcon
+          banner
+          message={`风控降级：${badQuotes} 个标的行情缺失或陈旧，止损与集中度未参与判定`}
+          className="!mb-3"
+        />
+      )}
       {error && <Alert type="error" showIcon message={error} className="!mb-3" closable />}
 
       <div className="grid grid-cols-3 gap-4 mb-4">
@@ -641,6 +691,7 @@ export default function RiskPage() {
           valueColor={pctColor(d.current_drawdown)}
           hint={`熔断线 ${d.drawdown_threshold.toFixed(0)}% · 峰值净值 ${d.peak_unit_nav.toFixed(4)}`}
           percent={ddRatio}
+          badge={d.degraded ? "未参与判定" : undefined}
         />
         <MetricCard
           label="止损持仓"
@@ -648,6 +699,7 @@ export default function RiskPage() {
           valueColor={d.stop_loss_count > 0 ? RED : undefined}
           hint={`止损线 ${d.stop_loss_threshold.toFixed(0)}% · 共 ${d.position_count} 个持仓`}
           percent={d.stop_loss_count > 0 ? 100 : 0}
+          badge={d.degraded ? "未参与判定" : undefined}
         />
         <MetricCard
           label="最大集中度"
@@ -655,6 +707,7 @@ export default function RiskPage() {
           valueColor={d.max_weight > d.concentration_threshold ? RED : undefined}
           hint={`${d.max_weight_symbol || "—"} · 上限 ${d.concentration_threshold.toFixed(0)}%`}
           percent={concentrationRatio}
+          badge={d.degraded ? "未参与判定" : undefined}
         />
       </div>
 
@@ -877,7 +930,7 @@ export default function RiskPage() {
                       ["已结交易", tripStats?.total_trades ?? 0],
                       ["胜率", `${(tripStats?.win_rate ?? 0).toFixed(0)}%`],
                       ["盈亏比", tripStats?.profit_factor != null ? tripStats.profit_factor.toFixed(2) : "—"],
-                      ["已结盈亏", (tripStats?.total_realized_pnl ?? 0).toFixed(2)],
+                      ["已结盈亏 (USD)", (tripStats?.total_realized_pnl_base ?? 0).toFixed(2)],
                     ].map(([label, value]) => (
                       <Card key={String(label)} size="small" styles={{ body: { padding: "10px 14px" } }}>
                         <Text type="secondary" style={{ fontSize: 12 }}>{label}</Text>
@@ -886,6 +939,11 @@ export default function RiskPage() {
                     ))}
                   </div>
 
+                  {tripStats && (
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      {tripStats.fx_note}{tripStats.mixed_currency ? " · 当前为多币种组合，明细按原币显示" : ""}
+                    </Text>
+                  )}
                   <Text strong style={{ fontSize: 13 }}>T+30 时光机</Text>
                   <Table
                     dataSource={dueReviews}
@@ -1028,9 +1086,68 @@ export default function RiskPage() {
                     <Input size="small" style={{ width: 100 }} placeholder="代码" value={stressSymbol} onChange={(e) => setStressSymbol(e.target.value)} />
                     <InputNumber size="small" style={{ width: 100 }} value={stressSymbolPct} min={-90} max={200} addonAfter="%" onChange={(v) => setStressSymbolPct(v ?? 0)} />
                     <Button size="small" type="primary" onClick={runStress}>试算</Button>
-                    <Button size="small" onClick={() => fetchContractRisk([])}>合约强平距离</Button>
+                    <Button
+                      size="small"
+                      loading={contractBusy}
+                      onClick={async () => {
+                        setContractBusy(true);
+                        await fetchContractRisk();
+                        setContractBusy(false);
+                      }}
+                    >合约强平距离</Button>
                     <Button size="small" onClick={fetchQuality}>数据质量体检</Button>
                   </div>
+                  <div className="flex flex-wrap items-center gap-2 mb-3">
+                    <Text type="secondary" style={{ fontSize: 12 }}>汇率冲击</Text>
+                    <InputNumber
+                      size="small"
+                      style={{ width: 120 }}
+                      addonBefore="CNY"
+                      addonAfter="%"
+                      value={fxCny}
+                      min={-90}
+                      max={90}
+                      onChange={(v) => setFxCny(v ?? 0)}
+                    />
+                    <InputNumber
+                      size="small"
+                      style={{ width: 120 }}
+                      addonBefore="HKD"
+                      addonAfter="%"
+                      value={fxHkd}
+                      min={-90}
+                      max={90}
+                      onChange={(v) => setFxHkd(v ?? 0)}
+                    />
+                    <Button
+                      size="small"
+                      loading={scenarioBusy}
+                      onClick={async () => {
+                        setScenarioBusy(true);
+                        const overrides = stressSymbol.trim()
+                          ? [{ symbol: stressSymbol.trim().toUpperCase(), price_change_percent: stressSymbolPct }]
+                          : [];
+                        const fx = fxCny || fxHkd
+                          ? { cny_percent: fxCny, hkd_percent: fxHkd }
+                          : null;
+                        await compareScenarios([-10, -20, -30], overrides, fx);
+                        setScenarioBusy(false);
+                      }}
+                    >三档情景对比</Button>
+                    <Text type="secondary" style={{ fontSize: 11 }}>
+                      汇率冲击仅作用于非现金持仓折算市值，现金不参与
+                    </Text>
+                  </div>
+                  {scenarios.length > 0 && (
+                    <Table
+                      dataSource={scenarios}
+                      columns={scenarioColumns}
+                      rowKey="label"
+                      size="small"
+                      pagination={false}
+                      className="mb-4"
+                    />
+                  )}
                   {stressResult && (
                     <Descriptions size="small" column={4} className="mb-3" items={[
                       { key: "a", label: "当前回撤", children: `${stressResult.baseline_drawdown.toFixed(2)}%` },
@@ -1055,11 +1172,38 @@ export default function RiskPage() {
                       <Table dataSource={contractRisks} columns={contractColumns} rowKey="id" size="small" pagination={false} className="mt-2 mb-4" />
                     </>
                   )}
+                  <div className="flex flex-wrap items-center gap-2 mb-3">
+                    <Text type="secondary" style={{ fontSize: 12 }}>行情缓存</Text>
+                    <Input
+                      size="small"
+                      style={{ width: 120 }}
+                      placeholder="标的代码"
+                      value={cacheSymbol}
+                      onChange={(e) => setCacheSymbol(e.target.value)}
+                    />
+                    <Popconfirm
+                      title="清除该标的行情缓存？"
+                      description="用于拆股/合股或大小写重复行；下一次行情刷新将按新价写入。"
+                      onConfirm={async () => {
+                        const sym = cacheSymbol.trim();
+                        if (!sym) { message.warning("请填写标的代码"); return; }
+                        const n = await clearQuoteCache(sym);
+                        if (n >= 0) message.success(`已清除 ${n} 行缓存，等待下一次行情刷新`);
+                      }}
+                    >
+                      <Button size="small">清除缓存</Button>
+                    </Popconfirm>
+                  </div>
                   {quality && (
                     <Card size="small" title={`数据质量：检查 ${quality.checked} 项，发现 ${quality.rejected} 项异常`}>
                       {quality.issues.length === 0
                         ? <Text type="secondary" style={{ fontSize: 12 }}>未发现异常价格或汇率。</Text>
-                        : quality.issues.map((it, i) => <div key={i} style={{ fontSize: 12 }}><Tag color="orange">{it.kind}</Tag>{it.symbol} · {it.message}</div>)}
+                        : quality.issues.map((it, i) => (
+                          <div key={i} style={{ fontSize: 12 }}>
+                            <Tag color="orange">{it.kind}</Tag>{it.symbol} · {it.message}
+                            <Button type="link" size="small" onClick={() => setCacheSymbol(it.symbol)}>填入</Button>
+                          </div>
+                        ))}
                     </Card>
                   )}
                 </div>

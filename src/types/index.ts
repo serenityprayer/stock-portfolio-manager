@@ -873,7 +873,9 @@ export interface ExternalCashFlow {
 }
 
 export interface RiskDashboard {
-  status: "normal" | "warning" | "blocked";
+  /** degraded = quotes missing/stale, iron laws skipped judgement. */
+  status: "normal" | "warning" | "blocked" | "degraded";
+  degraded: boolean;
   as_of: string;
   base_currency: string;
   total_assets: number;
@@ -962,13 +964,17 @@ export interface DisciplineStats {
 export interface RoundTrip {
   symbol: string;
   market: string;
+  currency: string;
   open_at: string;
   close_at: string;
   holding_days: number;
   qty: number;
   avg_open_price: number;
   avg_close_price: number;
+  /** Trade-currency PnL. */
   realized_pnl: number;
+  /** Same PnL in the base currency (USD) — used by all aggregate stats. */
+  realized_pnl_base: number;
   return_rate: number;
   open_note: string | null;
   close_note: string | null;
@@ -981,7 +987,13 @@ export interface RoundTripStats {
   losing_trades: number;
   win_rate: number;
   profit_factor: number | null;
+  /** Native-currency sum (only meaningful for a single-currency portfolio). */
   total_realized_pnl: number;
+  /** Canonical cross-market sum in `base_currency`. */
+  total_realized_pnl_base: number;
+  base_currency: string;
+  mixed_currency: boolean;
+  fx_note: string;
   avg_holding_days: number;
   best_trade: RoundTrip | null;
   worst_trade: RoundTrip | null;
@@ -1130,6 +1142,20 @@ export interface StressResult {
     old_value: number;
     new_value: number;
   }>;
+}
+
+export interface FxShock {
+  cny_percent: number;
+  hkd_percent: number;
+}
+
+export interface ScenarioResult {
+  label: string;
+  global_percent: number;
+  stressed_total_assets: number;
+  stressed_drawdown: number;
+  status: string;
+  finding_count: number;
 }
 
 export interface ContractPriceInput {

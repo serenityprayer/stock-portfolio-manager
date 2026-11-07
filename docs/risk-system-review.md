@@ -9,7 +9,7 @@
 
 **P2–P4 已全部落地，自测全绿，可以进入真实点验。** 本轮新增 33 个 Rust 单测（累计 253 通过）、43 项真实库副本回放、199 处 SQL 绑定检查，前端类型检查与构建均通过。
 
-但**「编译通过」不等于「可放心依赖数值」**。复核发现 4 个会影响判断正确性的问题（A 级），其中最重要的是：**加密合约缺实时行情，强平距离监控目前形同虚设**；**LIFO 盈亏未按币种折算**，一旦有 HK/CN 持仓，胜率与总盈亏会混币种相加。这两项建议在下轮优先处理，本次未做是因为都需要改动既有行情链路，属于独立变更。
+本轮（2026-11-08）已按 §4 优化建议实施：A1–A4 全部解决，技术债与冷静期绕过一并修复，详见 §7。当前验证结果：**cargo test 261 passed / 0 failed**、tsc 零错误、build 通过、SQL 绑定 202 处 0 跳过、真实库回放 **50/50 通过**。
 
 另外发现并修复了一个**真实生产配置漂移**：`STALE_DATA` 阈值在真实库里停留在 60 分钟（代码默认已是 24 小时），意味着美股盘后与周末三铁律会静默失效。已加幂等迁移。
 
@@ -140,3 +140,56 @@
 | 真实库 `transactions` | 24 行（12 OPEN / 7 BUY / 5 SELL），全部 USD；LIFO 配对期望值见 §1 |
 | 设计文档 | `docs/risk-control-system-design.md` v1.3 §16–§20（P0–P4 实施记录与偏差） |
 | 本次新增代码 | `models/{reflection,advisor,enhancement}.rs`、`services/{reflection_service,advisor_service,secret_store,data_quality,stress_service,contract_risk_service}.rs`、`commands/{reflection,advisor,enhancement}.rs`、`pages/Risk/index.tsx`、`stores/riskStore.ts`、`types/index.ts`、`db/mod.rs`、`services/{risk_service,quote_service,ai_config_service}.rs` |
+
+---
+
+## 7. 优化项实施结果（2026-11-08）
+
+| 优先级 | 优化 | 状态 | 关键变化 |
+|---|---|---|---|
+| 1 | 合约风控接实时行情 | **已做** | `riskStore.fetchContractRisk()` 抓 Gate.io / TradFi 报价传给后端；A1 解决 |
+| 2 | 行情强制刷新 / 清缓存 | **已做** | `clear_quote_cache` 命令 + 数据质量 Tab 入口；A3 解决，兼清大小写重复行 |
+| 3 | LIFO 折算基准货币 | **已做** | `realized_pnl_base` / `total_realized_pnl_base` / `mixed_currency`；A2 解决 |
+| 4 | 驾驶舱 `degraded` | **已做** | `dashboard_status` 纯函数 + 灰角标 + Alert；A4 解决 |
+| 5 | `build_context` 读写分离 | **已做** | `should_persist_hwm`，消除 30s 无变化写 |
+| 6 | 路由级 code split | **已做** | 16 路由 lazy + 4 组 vendor chunk；最大 chunk 4.33 MB → 1.77 MB |
+| 7 | 静态 SQL + 清理警告 | **已做** | 静态语句 + 防呆脚本增强；202 检查 / 0 跳过，Rust 警告 17 → 2 |
+| 8 | 冷静期软删除 | **已做** | `deleted_at` 幂等迁移，堵住 B1 绕过 |
+| 9 | FTS5 / 引用回库核验 | **部分** | 已修 B5 引用误报（全量候选核验）；FTS5 未做（笔记量级 0） |
+| 10 | 汇率冲击 / 多情景对比 | **部分** | 已做三档情景对比 + CNY/HKD 冲击；波动率冲击未做（缺历史波动率序列） |
+| 11 | OS 通知 | **不做** | 沿用既有排除理由 |
+
+### 7.1 遗留问题（已降级或需讨论）
+
+| # | 问题 | 现状 / 建议 |
+|---|---|---|
+| D1 | LIFO 用**当前缓存汇率**，非成交日历史汇率 | 真实库全 USD 无影响；出现 HK/CN 历史交易前需补汇率历史表 |
+| D2 | 汇率冲击不含现金 | `cash_value_base` 无币种拆分；需完整敏感度时先做 cash breakdown |
+| D3 | 引用校验用「全量本地候选」而非定点回库 | 已消除 top-8 误报；若需严格防编造，加 `source → 表` 映射定点查询 |
+| D4 | Vite 仍有 500 kB chunk 警告 | `vendor` 1.77 MB / `antd` 1.05 MB / `charts` 1.05 MB；已按边界拆分，进一步细化收益递减 |
+| D5 | 无 UI 层自动化回归（原 C7） | 仍需手动点验 `precheck_trade` 弹窗、BLOCK 覆盖理由、AI 质询、情景对比 |
+| D6 | `PAY` 分红与 LIFO 成本口径不一致（原 B4） | 未纳入本轮；需先定义分红是否回冲 round-trip |
+| D7 | 纪律分分母只含手动录入（原 B2） | 已用 `low_sample` 标注；CSV/图片导入仍豁免留痕 |
+
+### 7.2 本轮需要真机点验的动作（需重启 `npm run tauri dev`）
+
+1. 风控中心 →「压力测试」点「合约强平距离」，确认 ETH/BNB 显示实时价而非「缺少实时报价」。
+2. 同页点「三档情景对比」，确认 -10/-20/-30% 三行回撤单调加深，且 HWM 未变。
+3. 数据质量体检 → 对 `TCOM` 点「填入」→「清除缓存」，确认异常条目消失。
+4. 「复盘」确认统计卡显示「已结盈亏 (USD)」及汇率口径说明。
+5. 观察列表移除一个未满 7 天的标的后重新加入，确认仍被 BLOCK（冷静期不可重置）。
+
+---
+
+## 8. 证据与出处（本轮）
+
+| 来源 | 核实内容 |
+|---|---|
+| `cargo test --lib` | 261 passed / 0 failed / 8 ignored；新增 `dashboard_status_precedence` 与 HWM 写分离 2 项、LIFO 折算 2 项、`fx_shock` 1 项、AI 引用 1 项、冷静期软删除 1 项（共 8 项） |
+| `tests/replay_risk_pipeline.py` | 50/50；新增软删除绕过、缓存清除、LIFO USD 口径、降级输入、HWM 字段等 7 项断言 |
+| `tests/check_sql_bindings.py` | 202 处绑定检查、0 跳过；`--selftest` 4 例通过。脚本新增 `const &str` 引用解析与非 SQL 字面量过滤 |
+| `npx tsc --noEmit` / `npm run build` | 零类型错误；构建通过，产物按路由与 4 组 vendor 拆分 |
+| `cargo check` | 无代码警告；仅剩 2 条 Windows 增量编译锁文件权限告警（环境问题） |
+| 真实库 `watchlist` | 已含 `deleted_at` 列（迁移生效）；回放副本自动补列 |
+| 真实库 `transactions` | 24 行全部 USD；LIFO 折算前后均为 +6.75 / 盈亏比 1.0510 |
+| 设计文档 | `docs/risk-control-system-design.md` v1.4 §21（优化轮实施记录与讨论项） |

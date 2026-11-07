@@ -2,7 +2,7 @@
 
 > 项目：stock-portfolio-manager（Tauri 2 + Rust + React + SQLite，本地单机）
 > 设计依据：`all_documents.zip` 六份参考材料（风和亚洲理念 / RiskControl / 投资镜子 PIP / 过程即奖励）
-> 版本：v1.3 · 2026-11-07 · 状态：**P0–P4 全部已实施**（实施记录见 §16–§20；问题与优化清单见 `docs/risk-system-review.md`）
+> 版本：v1.4 · 2026-11-08 · 状态：**P0–P4 + 优化轮全部已实施**（实施记录见 §16–§21；问题与优化清单见 `docs/risk-system-review.md`）
 
 ---
 
@@ -1038,4 +1038,59 @@ cashflow::record_external_flow(...)         -> ()              // §7.3 方案 A
 
 ---
 
-*§1–§15 为系统设计；§16–§20 依次记录 P0–P4 的实际落地情况与偏差。问题清单与优化建议见 `docs/risk-system-review.md`。文档随实现同步更新。*
+---
+
+## 21. 优化轮实施记录（2026-11-08）
+
+来源：`docs/risk-system-review.md` §4「系统可优化点（按投入产出排序）」。本轮把可落地项一次做完，并把无法在本轮完成的部分显式列入讨论，避免「建议写了但没人做、也不知道为什么没做」。
+
+### 21.1 交付清单
+
+| # | 优化 | 状态 | 落地要点 |
+|---|---|---|---|
+| 1 | 合约风控接实时行情 | 已做 | `riskStore.fetchContractRisk()` 自行调用 `fetch_crypto_quotes` / `fetch_tradfi_quotes`，组装 `ContractPriceInput[]` 再调 `evaluate_contract_risk`；后端三级兜底（实时 → 缓存 → 开仓价）保留，加密标的不再恒定回落到开仓价 |
+| 2 | 行情强制刷新通道 | 已做 | 新增 `clear_quote_cache(symbol)`：按 `UPPER(symbol)` 删除缓存行，下一次行情刷新即按「首次观察」通过跳变校验；数据质量 Tab 提供输入框 + 二次确认 + issue「填入」快捷键。顺带清掉 `TCOM`/`tcom` 这类大小写重复行 |
+| 3 | LIFO 折算基准货币 | 已做 | `TxRow.currency` / `Lot.fx` / `RoundTrip.realized_pnl_base`；胜率、盈亏比、best/worst、`total_realized_pnl_base` 一律用 USD 口径；新增 `mixed_currency` 与 `fx_note` 明示口径 |
+| 4 | 驾驶舱 `degraded` 状态 | 已做 | `dashboard_status(findings, degraded)` 纯函数（blocked > warning > degraded > normal）；`RiskDashboard.degraded` + 三张铁律卡灰角标「未参与判定」+ 顶部 Alert |
+| 5 | `build_context` 读写分离 | 已做 | `should_persist_hwm(prev, next)` 仅在净值/峰值/基准/净现金流等风险相关字段变化时 `UPDATE`，30s 轮询不再产生无变化写 |
+| 6 | 路由级 code split | 已做 | 16 个非首屏路由改 `React.lazy` + `Suspense`；Vite `manualChunks` 拆 `react-vendor` / `antd-vendor` / `charts` / `vendor`。最大单 chunk 由 4.33 MB 降至 1.77 MB |
+| 7 | 静态 SQL + 清理警告 | 已做 | `list_due_reviews`、memo、HWM、rule、event、watchlist 全部改字面量语句；防呆脚本增强为可解析 `const &str` 引用并忽略非 SQL 字面量 → **202 处检查、0 跳过**；Rust 警告 17 → 2（仅 Windows 增量锁文件权限告警） |
+| 8 | 冷静期软删除 | 已做 | `watchlist.deleted_at` 幂等迁移；移除改 `UPDATE status='removed'`；`ON CONFLICT(symbol,market)` 恢复时保留首次 `added_at`；所有查询加 `deleted_at IS NULL`；新增单测与回放断言 |
+| 9 | FTS5 / 引用回库核验 | 部分 | **做了** B5 引用误报：本地检索取全量候选（`EVIDENCE_CANDIDATES=400`），prompt 仍只发 top-8，引用校验用全量。**未做** FTS5，理由见 §21.3 |
+| 10 | 汇率冲击 / 多情景对比 | 部分 | **做了** `compare_stress_scenarios`：`FxShock` + `ScenarioResult` + `run_batch`，前端「三档情景对比」（-10/-20/-30%）并排展示。**未做** 波动率冲击，理由见 §21.3 |
+| 11 | OS 通知 | 不做 | 沿用 §10.2「灰色角标、不弹窗打扰」与用户极简偏好；需引入 `tauri-plugin-notification` 与权限配置 |
+
+### 21.2 关键口径与诚实边界
+
+- **LIFO 汇率用的是当前缓存汇率**（`cached_exchange_rates`），不是成交日历史汇率。真实库 24 笔全 USD，折算前后完全一致（回放断言 6.75 USD）；引入 HK/CN 历史交易后，跨年度汇率变动会带来偏差，需先建汇率历史表再升级。
+- **汇率冲击只作用于非现金持仓的折算市值**。`RiskContext` 只保留汇总后的 `cash_value_base`，没有按账户/币种的现金拆分，因此现金不参与汇率冲击；UI 已标注。这是保守估计，不是完整的组合汇率敏感度。
+- **`degraded` 不覆盖真实预警**：有 BLOCK/CRITICAL/WARNING 时状态仍显示熔断/预警，只是 `degraded=true` 会让三张卡同时打角标，避免「降级提示盖过真实风险」。
+- **清缓存是解除自锁的逃逸口，不是绕过校验**：只删缓存行，价格范围校验仍在；拆股/合股后点一次清缓存，下一次行情刷新按新价写入。
+- **code split 未消除 Vite 的 500 kB 警告**：`vendor` 1.77 MB、`antd-vendor` 1.05 MB、`charts` 1.05 MB 仍偏大，但已按路由与依赖边界拆开，页面编辑不再让整个 4.33 MB bundle 失效。
+
+### 21.3 未实施项与讨论（需用户定夺）
+
+| 项 | 为什么没做 | 触发条件 / 建议 |
+|---|---|---|
+| SQLite FTS5 全文检索 | 真实库 `investment_memos` 为 0 行，本地候选最多几百条；词频评分已够用。建虚拟表 + 触发器同步的复杂度大于收益 | 笔记量级上千、或出现中文同义表述召回失败时再升级 |
+| 引用按 `(source, ref_id)` 真正回库核验 | 本轮用「全量本地候选」替代，已消除 top-8 误报；若模型凭空引用一个库里存在的 UUID，仍会通过 | 需要严格防编造时，加一张 `source → 表` 的映射做定点查询 |
+| 波动率 / 多因子冲击 | 需要历史波动率序列与相关性假设，当前只有日频组合净值且口径不含现金 | 先落一份口径统一的日频净值表，再做情景引擎 |
+| 现金币种分布建模 | `cash_value_base` 是汇总值，缺按账户币种拆分 | 汇率冲击要覆盖现金时，需在 `build_context` 保留 cash breakdown |
+| 历史成交日汇率 | 无汇率历史表 | 首次出现 HK/CN 交易前补齐，否则 LIFO 折算会有时点偏差 |
+| UI 层自动化回归 | 本轮仍靠 Rust 单测 + Python 数据层回放 | 引入 Playwright / Vitest 后补 `precheck_trade` 弹窗、BLOCK 覆盖理由等交互用例 |
+| OS 通知 / DPAPI / 多轮 AI 对话 / 云同步 | 沿用既有排除（§19.4、§20.3、§2.3），本轮未发现需要推翻的理由 | — |
+
+### 21.4 验证结果
+
+| 项目 | 结果 |
+|---|---|
+| `cargo test --lib` | **261 passed / 0 failed / 8 ignored**（本轮 +8） |
+| `npx tsc --noEmit` | 零错误 |
+| `npm run build` | 通过；16 个页面独立 chunk，最大 1.77 MB |
+| `check_sql_bindings.py` | **202 处绑定检查、0 跳过**；`--selftest` 通过 |
+| `tests/replay_risk_pipeline.py` | **50/50 通过**（新增软删除绕过、缓存清除、LIFO 折算口径等 7 项） |
+| `cargo check` | 通过，仅剩 2 条 Windows 增量编译锁文件权限告警 |
+
+---
+
+*§1–§15 为系统设计；§16–§20 记录 P0–P4、§21 记录优化轮的实际落地情况与偏差。问题清单与优化建议见 `docs/risk-system-review.md`。文档随实现同步更新。*
